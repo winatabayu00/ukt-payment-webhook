@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: UKT Payment API (Proposal)
+  version: 0.1.0
+  description: >
+    Draft contract for planning only. Routes, authentication, payloads and
+    response codes must be reconciled with the actual Laravel implementation
+    and mock gateway before this file is treated as authoritative.
+servers:
+  - url: /api
+paths:
+  /invoices:
+    post:
+      summary: Create a UKT invoice
+      description: Tenant must be resolved from trusted authentication context; do not trust tenant ID supplied by the caller.
+      responses:
+        "201":
+          description: Invoice created
+        "401":
+          description: Authentication required, if applicable
+        "422":
+          description: Validation failed
+        "409":
+          description: Invoice number conflicts within this institution
+  /invoices/{invoiceId}:
+    get:
+      summary: Get invoice status/details
+      parameters:
+        - in: path
+          name: invoiceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Invoice details
+        "404":
+          description: Not found or not visible within the current tenant
+  /students/{studentNumber}/invoices:
+    get:
+      summary: List invoices for a student in the current institution
+      parameters:
+        - in: path
+          name: studentNumber
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Student invoice list
+  /invoices/{invoiceId}/transactions:
+    get:
+      summary: List payment transactions for an invoice
+      parameters:
+        - in: path
+          name: invoiceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transaction history
+        "404":
+          description: Not found or not visible within the current tenant
+  /webhooks/payments:
+    post:
+      summary: Receive payment gateway event
+      parameters:
+        - in: header
+          name: X-Signature
+          required: true
+          schema:
+            type: string
+          description: HMAC-SHA256 signature; exact encoding and signed bytes must match mock gateway contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - institution_code
+                - event_type
+              properties:
+                institution_code:
+                  type: string
+                event_type:
+                  type: string
+                  enum: [payment.success, payment.expired]
+                event_id:
+                  type: string
+                  description: Optional in this draft; confirm whether mock gateway supplies it.
+                invoice_number:
+                  type: string
+                gateway_transaction_id:
+                  type: string
+                amount:
+                  type: string
+                occurred_at:
+                  type: string
+                  format: date-time
+      responses:
+        "200":
+          description: Event accepted/processed or duplicate, according to final policy
+        "400":
+          description: Malformed payload
+        "401":
+          description: Unknown institution or invalid signature, according to final policy
+        "422":
+          description: Validly signed event failed domain validation
