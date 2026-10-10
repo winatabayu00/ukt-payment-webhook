@@ -61,6 +61,38 @@ The builder (`App\Support\MockGatewayEventBuilder`) is also reusable in
 tests without HTTP: `::success([...])` / `::expired([...])` →
 `payload()`, `rawBody()`, `signature($secret)`, `headers($secret)`, `asCurl($url, $secret)`.
 
+## PostgreSQL via Docker (user-managed)
+
+App default memakai sqlite lokal. Untuk memakai PostgreSQL di Docker milik
+sendiri (tanpa commit secret):
+
+```bash
+docker exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE DATABASE ukt_payment;"'
+```
+
+Arahkan `.env` lokal (tetap ignored, jangan commit):
+
+```
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=ukt_payment
+DB_USERNAME=<POSTGRES_USER kamu>
+DB_PASSWORD=<POSTGRES_PASSWORD kamu>
+```
+
+Lalu migrate + seed dan verifikasi:
+
+```bash
+php artisan migrate:fresh --force --seed
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/up  # -> 200
+vendor/bin/phpunit  # tetap hijau via sqlite :memory:
+```
+
+Catatan: bila shell mengekspor `DB_CONNECTION=sqlite` / `DB_DATABASE=...`,
+Laravel akan memakai shell env itu (bukan `.env`). Jalankan artisan dengan
+`env -u DB_CONNECTION -u DB_DATABASE` untuk memakai `.env`.
+
 ## Konfigurasi
 - `.env.example` boleh memuat nama variabel dan placeholder.
 - Jangan commit `.env`.
