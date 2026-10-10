@@ -22,6 +22,15 @@ Jangan mencantumkan command spesifik yang belum diuji terhadap versi Laravel yan
 
 ## Mock gateway sender (verified)
 
+One-shot demo script (preferred for reviewers) — spins up a throwaway sqlite
+DB, serves the app, creates two invoices, drives success + expired webhooks
+with an idempotent replay, and asserts every step:
+
+```bash
+bash scripts/demo.sh
+# DEMO_PORT=18099 DEMO_KEEP=1 bash scripts/demo.sh  # keep server+DB for poking
+```
+
 Command `php artisan mock:gateway-event` builds a contract-valid payload
 (`contracts/openapi.yaml`), signs it with the institution `webhook_secret`
 (DB lookup, demo-only secrets), and POSTs to `/api/webhooks/payments`.

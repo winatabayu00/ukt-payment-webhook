@@ -14,6 +14,7 @@ Laravel modular-monolith backend for UKT invoices, tenant-isolated reads, and HM
 ## Quickstart (verified)
 
 ```bash
+composer install
 cp .env.example .env
 php artisan key:generate
 touch database/database.sqlite
@@ -27,6 +28,13 @@ Mock gateway sender (verified E2E, see `docs/10-local-development.md`):
 
 ```bash
 php artisan mock:gateway-event --invoice=INV-MOCK-001 --event-id=evt-demo-1 --gateway-id=gw-demo-1
+```
+
+Full end-to-end demo (throwaway sqlite DB, asserts every step — invoice create,
+success + expired webhooks, idempotent replay, final statuses):
+
+```bash
+bash scripts/demo.sh   # 🎉 demo green: invoice create + success/expired webhooks + idempotent replay
 ```
 
 Seed (`InstitutionSeeder`, demo-only secrets — rotate in real envs):
