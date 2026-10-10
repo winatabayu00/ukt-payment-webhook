@@ -1,6 +1,6 @@
 # Technical Decisions (Final — Phase 1 verified + prod hardening)
 
-Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (29 tests, 111 assertions)` on sqlite `:memory:`. pgsql is user-managed via `.env.example` placeholders; prod template in `.env.production.example`.
+Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (35 tests, 136 assertions)` on sqlite `:memory:`. pgsql is user-managed via `.env.example` placeholders; prod template in `.env.production.example`.
 
 ## 1. Modular monolith Laravel — FINAL
 **Options:** (A) modular monolith, (B) microservices, (C) unstructured controllers.
@@ -35,3 +35,9 @@ Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (29 tests, 111 
 **Chosen:** A. Real per-institution token auth on all invoice endpoints; HMAC webhook verification + replay protection untouched; per-token invoice throttle + per-IP webhook throttle; `.env.production.example` (`APP_ENV=production`, `APP_DEBUG=false`, pgsql placeholders only, no secrets) + rotation command + docs/contract updates.
 **Why:** Closes the demo-credential gap with minimal scope (no business-logic change, no new infra); OAuth/IdP deferred as out-of-scope per task.
 **Verified:** suite `OK (29 tests, 111 assertions)`; manual `401` without credential confirmed; `429` limiters registered in `route:list`; prod template contains no dev defaults and no secrets.
+
+## 7. Queue worker + monitoring/log untuk webhook — FINAL
+**Options:** (A) sync webhook + queued side effect + monitor command + structured logs, (B) full-async webhook now, (C) external APM/alerting now.
+**Chosen:** A. Webhook stays synchronous idempotent; `payment.success` commit dispatches `NotifyPaymentSuccessJob` (database driver, tries 3, backoff 10/60/300s) AFTER the DB transaction — rollback never leaves a stray job, dispatch failure never rolls back money. Unexpected processor exceptions mark the receipt `failed/internal_error` (stable secret-free reason), log `webhook.failed` with structured context, return HTTP `500` for gateway retry. `php artisan webhook:monitor` (read-only) reports per-status receipt counts, recent failures with `failure_reason`, `jobs pending` + `failed_jobs` + recent `failed_jobs` rows. Logs `webhook.processed` / `webhook.failed` / `payment.notification.sent|skipped` carry ids + outcome only, never secrets.
+**Why:** Keeps the verified idempotent money path untouched while making side effects retryable via the worker and failures visible to ops; full-async + external alerting deferred as out-of-scope per task.
+**Verified:** suite `OK (35 tests, 136 assertions)` (incl. `WebhookQueueMonitoringTest` 6: job dispatch on success, no job on expired, exception → `failed`/`500` no leak, job safe-rerun, monitor summary + institution scope); live `demo.sh` green → monitor `processed 2, duplicate 1, failed 0, jobs pending 1` → `queue:work --once` `DONE` → `0 pending, 0 failed` → monitor `OK`. Contract bumped `contracts/openapi.yaml` v1.2.0 (`500 failed/internal_error`).

@@ -45,6 +45,11 @@ class PaymentWebhookController extends Controller
             return 200;
         }
 
+        // Unexpected internal failure: 500 so the gateway retries.
+        if ($processing === WebhookProcessingStatus::Failed) {
+            return 500;
+        }
+
         return $processorStatus;
     }
 }

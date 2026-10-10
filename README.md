@@ -7,7 +7,7 @@ Laravel modular-monolith backend for UKT invoices, tenant-isolated reads, and HM
 - PHP 8.3.30, Composer 2.6.5, Laravel 13.35.0, PHPUnit 12.5.38
 - `DB_CONNECTION=sqlite`, `DB_DATABASE=database/database.sqlite` (local/test verified)
 - PostgreSQL is user-managed: `.env.example` keeps commented `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD` placeholders only
-- Suite: `OK (29 tests, 111 assertions)` on sqlite `:memory:` via `phpunit.xml`
+- Suite: `OK (35 tests, 136 assertions)` on sqlite `:memory:` via `phpunit.xml`
 - Health: `GET /up` → `200`
 - Git: `main`, no secrets committed (`.env` + `*.sqlite` ignored)
 
@@ -21,7 +21,7 @@ touch database/database.sqlite
 php artisan migrate:fresh --force --seed
 php artisan serve --port=8000
 curl -i http://127.0.0.1:8000/up   # 200
-vendor/bin/phpunit                  # OK (29 tests, 111 assertions)
+vendor/bin/phpunit                  # OK (35 tests, 136 assertions)
 ```
 
 Mock gateway sender (verified E2E, see `docs/10-local-development.md`):
@@ -71,7 +71,8 @@ Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_numbe
 
 - `tests/Feature/InvoiceTenantIsolationTest.php` (8): missing/unknown Bearer token `401`, plaintext never stored, scoped create `201`, dup-per-tenant `422` vs cross-tenant `201`, show `404` hides cross-tenant, student list `meta.total` scoped, transactions `404` cross-tenant.
 - `tests/Feature/PaymentWebhookTest.php` (13): malformed `400` no leak, bad/missing signature `401` audited, success → `paid` + row, replay `event_id` → `duplicate`, reused `gateway_transaction_id` → `duplicate`, expiry → `expired` no row, late success after expiry → `ignored success_after_expiry`, expired-after-paid → `ignored already_final`, amount mismatch `422`, unknown institution `401`, redaction, tenant scoping.
-- Plus stock `ExampleTest` unit/feature (2), `MockGatewayEventBuilderTest` (3), `MockGatewayCommandTest` (3) = 29 total.
+- Plus stock `ExampleTest` unit/feature (2), `MockGatewayEventBuilderTest` (3), `MockGatewayCommandTest` (3) + `WebhookQueueMonitoringTest` (6) = 35 total.
+- Webhook side effects + ops: `payment.success` commit dispatches `NotifyPaymentSuccessJob` (database queue, tries 3, after-commit) — run `php artisan queue:work`; unexpected processor exceptions mark receipts `failed/internal_error` (`500` for gateway retry); `php artisan webhook:monitor [--institution=CODE] [--failures=N]` shows status counts, recent failures, queue depth, `failed_jobs` (see `docs/10-local-development.md`).
 
 ## Security / tenancy notes
 
@@ -79,7 +80,7 @@ Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_numbe
 - Throttle: invoice routes `throttle:api-invoices` (per token per minute, `API_INVOICE_RATE_LIMIT=60`), webhook `throttle:api-webhooks` (per IP per minute, `API_WEBHOOK_RATE_LIMIT=300`) → `429` on exceed.
 - Prod template: `.env.production.example` (`APP_ENV=production`, `APP_DEBUG=false`, pgsql, no secrets). Run `migrate --force` on prod, never `migrate:fresh`.
 - Secrets: `.env` ignored, `database/*.sqlite` ignored, `vendor/` + caches ignored. Only demo `demo-secret-*-please-rotate` + `demo-token-*-please-rotate` in seeder (hash only) + test-only `APP_KEY` in `phpunit.xml`; real secrets stay in user-managed `.env`/PG, never committed.
-- Contract source of truth: `contracts/openapi.yaml` v1.1.0 (Bearer auth + 429). Proposals in `docs/05/06` remain planning background.
+- Contract source of truth: `contracts/openapi.yaml` v1.2.0 (Bearer auth + 429 + queued side effect + `500 failed/internal_error`). Proposals in `docs/05/06` remain planning background.
 
 ## Docs
 

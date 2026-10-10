@@ -111,6 +111,51 @@ Laravel akan memakai shell env itu (bukan `.env`). Jalankan artisan dengan
 - Rate limit prod dapat dioverride via `API_INVOICE_RATE_LIMIT` /
   `API_WEBHOOK_RATE_LIMIT` tanpa ubah kode.
 
+## Queue worker + monitoring webhook (verified)
+
+Webhook tetap diproses sinkron idempotent di request; efek samping
+`payment.success` (notifikasi out-of-band) jalan via queue driver `database`
+(`QUEUE_CONNECTION=database`, tabel `jobs`/`failed_jobs` dari migrasi stock):
+
+```bash
+php artisan queue:work --queue=default        # proses NotifyPaymentSuccessJob
+php artisan webhook:monitor                   # ringkasan receipts + antrian
+php artisan webhook:monitor --institution=CAMPUS-ALPHA --failures=20
+```
+
+Perilaku yang terverifikasi:
+
+- `payment.success` yang commit (invoice Paid + baris `payment_transactions`)
+  mendispatch `NotifyPaymentSuccessJob` (tries 3, backoff 10/60/300s)
+  SETELAH transaksi DB — rollback tidak pernah meninggalkan job stray,
+  kegagalan dispatch tidak pernah me-rollback pembayaran. `expired`,
+  `duplicate`, `ignored`, `rejected` tidak dispatch job.
+- Job idempotent dan aman di-rerun: record hilang / invoice belum paid →
+  skip dengan log `payment.notification.skipped`, bukan exception.
+- Exception tak terduga di processor menandai receipt `failed/internal_error`
+  (persisted `failure_reason` stabil, tanpa detail internals), log
+  `webhook.failed` berisi konteks terstruktur (ids + exception class), dan
+  HTTP `500` agar gateway retry. Respons tidak pernah membocorkan secret.
+- Log terstruktur tanpa secret: `webhook.processed` (setiap outcome),
+  `webhook.failed` (exception), `payment.notification.sent/skipped`.
+- `webhook:monitor` read-only: tabel count per `processing_status`,
+  failures terbaru (`rejected` + `failed` dengan `failure_reason`),
+  `jobs pending` + `failed_jobs` + entri `failed_jobs` terbaru,
+  warning bila ada failed receipt/job (atau `OK` bila bersih).
+
+Verified live (throwaway sqlite, `scripts/demo.sh` + worker):
+
+| Check | Result |
+|---|---|
+| `demo.sh` (create + success/expired + replay) | green |
+| `webhook:monitor` setelah demo | `processed 2, duplicate 1, failed 0`, `jobs pending 1` |
+| `queue:work --once` | `NotifyPaymentSuccessJob DONE`, `0 pending, 0 failed` |
+| `webhook:monitor` setelah worker | `0 pending`, `OK: no failed receipts or jobs` |
+
+`scripts/demo.sh` hermetic: memaksa `DB_CONNECTION=sqlite` + throwaway DB via
+template `mktemp` portabel (trailing `X`), sehingga export `DB_*` di host-shell
+(mis. kredensial pgsql harian) tidak pernah membelokkan demo ke database lain.
+
 ## Docker Compose
 Jika digunakan, sediakan service app dan database dengan volume/healthcheck yang jelas. Jangan menyimpan password produksi dalam compose file. Dokumentasikan port dan cara reset database.
 

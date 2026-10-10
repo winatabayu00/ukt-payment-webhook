@@ -6,13 +6,16 @@ use App\Enums\InvoiceStatus;
 use App\Enums\PaymentEventType;
 use App\Enums\TransitionOutcome;
 use App\Enums\WebhookProcessingStatus;
+use App\Jobs\NotifyPaymentSuccessJob;
 use App\Models\Institution;
 use App\Models\Invoice;
 use App\Models\PaymentTransaction;
 use App\Models\WebhookReceipt;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class PaymentWebhookProcessor
 {
@@ -47,6 +50,22 @@ class PaymentWebhookProcessor
             'payload_redacted' => $this->redact($payload),
         ]);
 
+        try {
+            return $this->handle($receipt, $rawBody, $signature, $payload);
+        } catch (Throwable $e) {
+            // Unexpected failure (DB outage, broken cast, bug): never leave a
+            // receipt stuck in `received`, never leak internals to the
+            // gateway. Mark Failed, log structured context server-side, and
+            // return 500 so the gateway retries.
+            return $this->fail($receipt, $e);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function handle(WebhookReceipt $receipt, string $rawBody, ?string $signature, array $payload): ProcessedWebhook
+    {
         $institutionCode = $this->stringOrNull($payload['institution_code'] ?? null);
         if ($institutionCode === null) {
             return $this->reject($receipt, 'institution_code_missing', 400);
@@ -110,9 +129,12 @@ class PaymentWebhookProcessor
 
         $occurredAt = $this->parseDateTime($payload['occurred_at'] ?? null);
 
-        return DB::transaction(function () use (
+        $paidContext = null;
+
+        $result = DB::transaction(function () use (
             $receipt, $institution, $eventType, $eventId,
-            $invoiceNumber, $gatewayTransactionId, $amount, $occurredAt
+            $invoiceNumber, $gatewayTransactionId, $amount, $occurredAt,
+            &$paidContext
         ) {
             /** @var Invoice|null $invoice */
             $invoice = Invoice::forInstitution($institution)
@@ -169,6 +191,19 @@ class PaymentWebhookProcessor
                         // delivery as an idempotent duplicate (HTTP 200).
                         return $this->finish($receipt, WebhookProcessingStatus::Duplicate, 'event_duplicate', 200);
                     }
+
+                    // Queued side effect: notify out-of-band AFTER the money
+                    // movement commits. The context is captured here but the
+                    // job is dispatched after the DB transaction returns, so
+                    // a rollback never leaves a stray job and a dispatch
+                    // failure never rolls back the payment.
+                    $paidContext = [
+                        $institution->id,
+                        $invoice->id,
+                        $transaction->id,
+                        $receipt->id,
+                        $eventId,
+                    ];
                 }
 
                 return $this->finish($receipt, WebhookProcessingStatus::Processed, null, 200);
@@ -180,6 +215,16 @@ class PaymentWebhookProcessor
 
             return $this->finish($receipt, WebhookProcessingStatus::Ignored, 'already_final', 200);
         });
+
+        // Dispatch the queued side effect only after a committed payment.
+        // Processed + captured context ⇒ MarkPaid path won. Anything else
+        // (duplicate/ignored/rejected) leaves $paidContext null.
+        if ($paidContext !== null
+            && $result->receipt->processing_status === WebhookProcessingStatus::Processed) {
+            NotifyPaymentSuccessJob::dispatch(...$paidContext);
+        }
+
+        return $result;
     }
 
     private function finish(
@@ -193,7 +238,52 @@ class PaymentWebhookProcessor
         $receipt->processed_at = now();
         $receipt->save();
 
+        // Structured, secret-free audit line: ids + outcome only.
+        Log::info('webhook.processed', [
+            'receipt_id' => $receipt->id,
+            'institution_id' => $receipt->institution_id,
+            'event_id' => $receipt->event_id,
+            'event_type' => $receipt->event_type,
+            'invoice_number' => $receipt->invoice_number,
+            'processing_status' => $status->value,
+            'failure_reason' => $failureReason,
+        ]);
+
         return new ProcessedWebhook($receipt, $httpStatus);
+    }
+
+    /**
+     * Mark the receipt Failed after an unexpected exception.
+     *
+     * Persisted failure_reason is a short exception-class slug (stable,
+     * secret-free); the full message + trace stay in the log only, never in
+     * the HTTP response.
+     */
+    private function fail(WebhookReceipt $receipt, Throwable $e): ProcessedWebhook
+    {
+        try {
+            $receipt->processing_status = WebhookProcessingStatus::Failed;
+            $receipt->failure_reason = 'internal_error';
+            $receipt->processed_at = now();
+            $receipt->save();
+        } catch (Throwable $persistError) {
+            Log::error('webhook.receipt_persist_failed', [
+                'receipt_id' => $receipt->id,
+                'error' => $persistError->getMessage(),
+            ]);
+        }
+
+        Log::error('webhook.failed', [
+            'receipt_id' => $receipt->id,
+            'institution_id' => $receipt->institution_id,
+            'event_id' => $receipt->event_id,
+            'event_type' => $receipt->event_type,
+            'invoice_number' => $receipt->invoice_number,
+            'exception' => $e::class,
+            'error' => $e->getMessage(),
+        ]);
+
+        return new ProcessedWebhook($receipt, 500);
     }
 
     /**

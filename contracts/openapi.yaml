@@ -1,15 +1,20 @@
 openapi: 3.0.3
 info:
   title: UKT Payment API
-  version: 1.1.0
+  version: 1.2.0
   description: >
-    Reconciled with the verified Laravel implementation (Phase 1 + prod hardening).
-    Tenant for invoice APIs is resolved from a per-institution API token in the
-    Authorization: Bearer header via ResolveInstitution (only the SHA-256 hash is
-    stored in institutions.api_token_hash); webhook tenant comes from
+    Reconciled with the verified Laravel implementation (Phase 1 + prod hardening
+    + queue worker/monitoring). Tenant for invoice APIs is resolved from a
+    per-institution API token in the Authorization: Bearer header via
+    ResolveInstitution (only the SHA-256 hash is stored in
+    institutions.api_token_hash); webhook tenant comes from
     payload.institution_code plus HMAC-SHA256 X-Signature over the raw body.
     sqlite is the verified local/test driver; pgsql env placeholders are
     user-managed. Invoice routes throttle per token, webhook per IP.
+    payment.success additionally dispatches a queued NotifyPaymentSuccessJob
+    (database driver) after commit; unexpected processor failures mark the
+    receipt failed/internal_error and return 500 for gateway retry. Ops
+    visibility via `php artisan webhook:monitor`.
 components:
   securitySchemes:
     institutionToken:
@@ -166,7 +171,8 @@ paths:
       responses:
         "200":
           description: >
-            processed (state moved), duplicate (event_id or gateway_transaction_id already seen),
+            processed (state moved; payment.success also queues NotifyPaymentSuccessJob
+            after commit), duplicate (event_id or gateway_transaction_id already seen),
             or ignored (already_final / success_after_expiry). Body is {data:{processing_status,failure_reason}}.
         "400":
           description: Malformed JSON (MALFORMED_PAYLOAD) or institution_code_missing.
@@ -176,3 +182,5 @@ paths:
           description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch.
         "429":
           description: Rate limit exceeded (throttle:api-webhooks, per IP per minute).
+        "500":
+          description: Unexpected internal failure; receipt marked failed/internal_error (see webhook:monitor + logs), safe for gateway retry.

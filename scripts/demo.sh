@@ -25,11 +25,15 @@ KEEP="${DEMO_KEEP:-0}"
 BASE="http://127.0.0.1:${PORT}"
 
 if [[ -z "${DEMO_DB:-}" ]]; then
-  DEMO_DB="$(mktemp /tmp/ukt-demo-XXXXXXXX.sqlite)"
+  # Portable template: trailing Xs so mktemp(1) substitutes on both GNU and BSD/macOS.
+  DEMO_DB="$(mktemp /tmp/ukt-demo-XXXXXXXXXX.sqlite)"
   DEMO_DB_CREATED=1
 else
   DEMO_DB_CREATED=0
 fi
+# Hermetic sqlite demo: force the sqlite driver regardless of host-exported
+# DB_CONNECTION/DB_* (host shells may export pgsql credentials for daily use).
+export DB_CONNECTION=sqlite
 export DB_DATABASE="$DEMO_DB"
 
 pass() { printf '  ✅ %s\n' "$1"; }
