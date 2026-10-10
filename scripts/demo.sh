@@ -25,8 +25,12 @@ KEEP="${DEMO_KEEP:-0}"
 BASE="http://127.0.0.1:${PORT}"
 
 if [[ -z "${DEMO_DB:-}" ]]; then
-  # Portable template: trailing Xs so mktemp(1) substitutes on both GNU and BSD/macOS.
-  DEMO_DB="$(mktemp /tmp/ukt-demo-XXXXXXXXXX.sqlite)"
+  # Portable: BSD/macOS mktemp(1) requires trailing Xs (no suffix after them),
+  # unlike GNU which accepts a suffix — so create the temp path first, then
+  # use a .sqlite sibling. GNU + BSD both handle this form.
+  DEMO_TMP_BASE="$(mktemp /tmp/ukt-demo-XXXXXXXXXX)"
+  rm -f "$DEMO_TMP_BASE"
+  DEMO_DB="${DEMO_TMP_BASE}.sqlite"
   DEMO_DB_CREATED=1
 else
   DEMO_DB_CREATED=0
@@ -35,6 +39,16 @@ fi
 # DB_CONNECTION/DB_* (host shells may export pgsql credentials for daily use).
 export DB_CONNECTION=sqlite
 export DB_DATABASE="$DEMO_DB"
+# An empty-but-exported host APP_KEY (e.g. APP_KEY= with no value) would shadow
+# the real key in .env and break encryption/seeding. Unset empties so .env wins;
+# if no key exists anywhere, generate an ephemeral one for this demo only
+# (never written to .env — applied to the current process env only).
+if [[ -z "${APP_KEY:-}" ]]; then
+  unset APP_KEY
+fi
+if [[ -z "${APP_KEY:-}" ]] && ! grep -qE '^APP_KEY=.+' .env 2>/dev/null; then
+  export APP_KEY="$(php artisan key:generate --show 2>/dev/null)"
+fi
 
 pass() { printf '  ✅ %s\n' "$1"; }
 fail() { printf '  ❌ %s\n' "$1" >&2; exit 1; }

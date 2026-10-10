@@ -1,20 +1,24 @@
 openapi: 3.0.3
 info:
   title: UKT Payment API
-  version: 1.2.0
+  version: 1.3.0
   description: >
     Reconciled with the verified Laravel implementation (Phase 1 + prod hardening
-    + queue worker/monitoring). Tenant for invoice APIs is resolved from a
-    per-institution API token in the Authorization: Bearer header via
-    ResolveInstitution (only the SHA-256 hash is stored in
+    + queue worker/monitoring + webhook audit-gap fixes). Tenant for invoice APIs
+    is resolved from a per-institution API token in the Authorization: Bearer
+    header via ResolveInstitution (only the SHA-256 hash is stored in
     institutions.api_token_hash); webhook tenant comes from
-    payload.institution_code plus HMAC-SHA256 X-Signature over the raw body.
-    sqlite is the verified local/test driver; pgsql env placeholders are
-    user-managed. Invoice routes throttle per token, webhook per IP.
-    payment.success additionally dispatches a queued NotifyPaymentSuccessJob
-    (database driver) after commit; unexpected processor failures mark the
-    receipt failed/internal_error and return 500 for gateway retry. Ops
-    visibility via `php artisan webhook:monitor`.
+    payload.institution_code plus HMAC-SHA256 X-Signature over the raw body
+    (plain hex or sha256=<hex>). sqlite is the verified local/test driver;
+    pgsql env placeholders are user-managed. Invoice routes throttle per token,
+    webhook per IP. payment.success additionally dispatches a queued
+    NotifyPaymentSuccessJob (database driver) after commit; unexpected processor
+    failures mark the receipt failed/internal_error and return 500 for gateway
+    retry. Gateway timestamps outside the occurred_at window are rejected 422;
+    success for a time-expired unpaid invoice is ignored without money movement.
+    Ops visibility via `php artisan webhook:monitor`; retention via
+    `php artisan webhook:prune`; webhook secret rotation via
+    `php artisan institution:webhook-secret <CODE> --rotate`.
 components:
   securitySchemes:
     institutionToken:
@@ -132,7 +136,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Lowercase hex HMAC-SHA256 over the raw request body using the institution webhook_secret; compared constant-time.
+          description: Lowercase hex HMAC-SHA256 over the raw request body using the institution webhook_secret; the common `sha256=<hex>` prefix form is also accepted (case-insensitive). Compared constant-time. Rotate via `php artisan institution:webhook-secret <CODE> --rotate` (encrypted at rest).
       requestBody:
         required: true
         content:
@@ -167,19 +171,21 @@ paths:
                 occurred_at:
                   type: string
                   format: date-time
-                  description: Optional; absent or empty ⇒ stored as null. A present but unparseable value is rejected 422 occurred_at_invalid.
+                  description: Optional; absent or empty ⇒ stored as null. A present but unparseable value is rejected 422 occurred_at_invalid. Values older than WEBHOOK_OCCURRED_AT_MAX_PAST_DAYS (default 30) are rejected 422 occurred_at_too_old; values more than WEBHOOK_OCCURRED_AT_MAX_FUTURE_MINUTES (default 15) in the future are rejected 422 occurred_at_in_future.
       responses:
         "200":
           description: >
             processed (state moved; payment.success also queues NotifyPaymentSuccessJob
             after commit), duplicate (event_id or gateway_transaction_id already seen),
-            or ignored (already_final / success_after_expiry). Body is {data:{processing_status,failure_reason}}.
+            or ignored (already_final / success_after_expiry, incl. a success for an
+            unpaid invoice already past expires_at — marked expired, no transaction row).
+            Body is {data:{processing_status,failure_reason}}.
         "400":
           description: Malformed JSON (MALFORMED_PAYLOAD) or institution_code_missing.
         "401":
           description: institution_unknown or signature_invalid. Every delivery is still audited in webhook_receipts.
         "422":
-          description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch, occurred_at_invalid.
+          description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch, occurred_at_invalid, occurred_at_too_old, occurred_at_in_future.
         "429":
           description: Rate limit exceeded (throttle:api-webhooks, per IP per minute).
         "500":

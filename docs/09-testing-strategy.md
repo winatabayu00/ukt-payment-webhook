@@ -5,7 +5,7 @@ Test otomatis wajib mencakup logika bisnis inti, terutama isolasi antar-institus
 
 ## Unit tests
 - `WebhookSignatureVerifierTest`
-  - Signature benar diterima.
+  - Signature benar diterima (plain hex maupun `sha256=<hex>`, case-insensitive).
   - Signature salah ditolak.
   - Secret salah ditolak.
   - Perbedaan byte raw body mengubah hasil signature.
@@ -30,8 +30,9 @@ Test otomatis wajib mencakup logika bisnis inti, terutama isolasi antar-institus
 - Kode institusi tidak dikenal ditolak dan diaudit.
 - Event duplikat tidak membuat transaksi kedua.
 - Event conflict/out-of-order mengikuti state machine.
-- Audit receipt dibuat untuk notifikasi valid dan invalid.
+- Audit receipt dibuat untuk notifikasi valid dan invalid (redaksi rekursif di semua kedalaman).
 - Rollback jika salah satu operasi database gagal.
+- `WebhookAuditGapsTest` (7, audit-gap fix): redact nested, prefix `sha256=`, `occurred_at` basi/masa-depan `422`, success untuk invoice kedaluwarsa-waktu di-ignore tanpa money movement, `webhook:prune` (failed dipertahankan default), `institution:webhook-secret --rotate`.
 
 ## Seed data
 Minimal tiga institusi sesuai brief. Gunakan secret palsu hanya untuk lingkungan lokal/test. Jangan gunakan secret yang dikirim oleh recruiter dalam fixture yang di-commit.

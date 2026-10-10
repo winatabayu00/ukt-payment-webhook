@@ -137,6 +137,23 @@ class PaymentWebhookProcessor
             return $this->reject($receipt, 'occurred_at_invalid', 422);
         }
 
+        // Staleness window: reject gateway timestamps too far in the past
+        // (replay/stale feed) or too far in the future (bad sender clock).
+        // Bounds come from config/api.php, overridable per environment.
+        if ($occurredAt !== null) {
+            $now = CarbonImmutable::now();
+            $maxPastDays = max(0, (int) config('api.webhook_occurred_at_max_past_days', 30));
+            $maxFutureMinutes = max(0, (int) config('api.webhook_occurred_at_max_future_minutes', 15));
+
+            if ($occurredAt->lessThan($now->subDays($maxPastDays))) {
+                return $this->reject($receipt, 'occurred_at_too_old', 422);
+            }
+
+            if ($occurredAt->greaterThan($now->addMinutes($maxFutureMinutes))) {
+                return $this->reject($receipt, 'occurred_at_in_future', 422);
+            }
+        }
+
         $paidContext = null;
 
         $result = DB::transaction(function () use (
@@ -152,6 +169,20 @@ class PaymentWebhookProcessor
 
             if (! $invoice) {
                 return $this->reject($receipt, 'invoice_not_found', 422);
+            }
+
+            // Time-based expiry: an unpaid invoice past its expires_at must
+            // never accept money, even if its status row still says unpaid.
+            // Move it to expired and treat the late success as a domain
+            // conflict (audited, retry-safe 200, no transaction row).
+            if ($eventType === PaymentEventType::Success
+                && $invoice->status === InvoiceStatus::Unpaid
+                && $invoice->expires_at !== null
+                && $invoice->expires_at->lte(now())) {
+                $invoice->status = InvoiceStatus::Expired;
+                $invoice->save();
+
+                return $this->finish($receipt, WebhookProcessingStatus::Ignored, 'success_after_expiry', 200);
             }
 
             // Amount must match exactly for payment.success.
@@ -355,6 +386,11 @@ class PaymentWebhookProcessor
         foreach ($payload as $key => $value) {
             if (in_array(strtolower((string) $key), self::SENSITIVE_KEYS, true)) {
                 $redacted[$key] = '[REDACTED]';
+
+                continue;
+            }
+            if (is_array($value)) {
+                $redacted[$key] = $this->redact($value);
 
                 continue;
             }

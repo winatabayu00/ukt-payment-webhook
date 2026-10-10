@@ -18,4 +18,31 @@ return [
 
     'webhook_rate_limit' => (int) env('API_WEBHOOK_RATE_LIMIT', 300),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook occurred_at staleness window
+    |--------------------------------------------------------------------------
+    |
+    | Gateway timestamps outside this window are rejected 422 instead of
+    | moving money: too far in the past (replay/stale feed) or too far in
+    | the future (clock skew / bad sender clock). Override per environment.
+    |
+    */
+
+    'webhook_occurred_at_max_past_days' => (int) env('WEBHOOK_OCCURRED_AT_MAX_PAST_DAYS', 30),
+
+    'webhook_occurred_at_max_future_minutes' => (int) env('WEBHOOK_OCCURRED_AT_MAX_FUTURE_MINUTES', 15),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook receipt retention (days)
+    |--------------------------------------------------------------------------
+    |
+    | Default window used by `php artisan webhook:prune` to delete old
+    | terminal receipts. Failed receipts are kept unless --include-failed.
+    |
+    */
+
+    'webhook_receipt_retention_days' => (int) env('WEBHOOK_RECEIPT_RETENTION_DAYS', 90),
+
 ];

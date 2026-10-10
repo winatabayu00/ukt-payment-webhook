@@ -25,6 +25,8 @@ Field `event_id`, `gateway_transaction_id`, `amount`, dan `occurred_at` adalah c
 ## Signature
 Konsep umum: `HMAC-SHA256(raw_request_body, institution_secret)` kemudian encoding signature sesuai kontrak gateway (misalnya hex). Header persis harus dibandingkan menurut format yang disepakati.
 
+Final (terverifikasi): header `X-Signature` menerima hex polos maupun bentuk umum `sha256=<hex>` (case-insensitive), diverifikasi constant-time (`hash_equals`) atas raw body. Secret disimpan encrypted-at-rest (cast `encrypted`, kunci `APP_KEY`); rotasi via `php artisan institution:webhook-secret <CODE> [--rotate] [--secret=...]` — plaintext dicetak sekali dan didistribusikan ke gateway out-of-band; signature lama berhenti valid setelah rotasi.
+
 Penting:
 - Gunakan **raw request body** jika itu yang ditandatangani oleh gateway; jangan serialize ulang JSON lalu menganggap byte-nya identik.
 - Verifikasi signature sebelum melakukan perubahan status atau transaksi.
@@ -56,6 +58,8 @@ Penting:
 Kebijakan draft:
 - Event `payment.expired` tidak boleh mengubah invoice yang sudah `paid` kembali menjadi `expired`.
 - Event `payment.success` yang datang setelah invoice `expired` membutuhkan kebijakan eksplisit; jangan mengasumsikan hasilnya tanpa konteks gateway.
+- Final (terverifikasi): `payment.success` untuk invoice `unpaid` yang sudah lewat `expires_at` secara waktu di-expire di tempat dan di-`ignored 200 success_after_expiry` tanpa baris `payment_transactions` — uang tidak bergerak untuk tagihan kedaluwarsa-waktu.
+- `occurred_at` gateway di luar jendela staleness (default max 30 hari lalu / 15 mnt depan via `WEBHOOK_OCCURRED_AT_MAX_PAST_DAYS` / `WEBHOOK_OCCURRED_AT_MAX_FUTURE_MINUTES`, `config/api.php`) di-reject `422 occurred_at_too_old|occurred_at_in_future` tanpa menggerakkan uang.
 - Event konflik tetap dicatat di audit.
 - Perubahan status dan pencatatan transaksi harus atomik.
 
@@ -68,7 +72,9 @@ Audit minimal sebaiknya dapat menjawab:
 - Apakah diproses, ditolak, atau gagal?
 - Apa kategori alasan kegagalannya?
 
-Jangan simpan secret, signature sensitif jika kebijakan melarangnya, authorization headers, atau data pribadi berlebihan. Redaksi payload dan retensi perlu diputuskan.
+Jangan simpan secret, signature sensitif jika kebijakan melarangnya, authorization headers, atau data pribadi berlebihan.
+
+Final (terverifikasi): redaksi `payload_redacted` rekursif di semua kedalaman (`webhook_secret/secret/card_number/card_cvv/signature` → `[REDACTED]`); retensi via `php artisan webhook:prune [--days=N] [--include-failed] [--dry-run]` (default N dari `WEBHOOK_RECEIPT_RETENTION_DAYS=90`; `failed` dipertahankan default untuk investigasi; invoices/transactions tidak pernah tersentuh).
 
 ## Pertanyaan yang wajib dijawab setelah mock tersedia
 - Apakah signature hex lowercase/uppercase, prefix tertentu, atau format lain?

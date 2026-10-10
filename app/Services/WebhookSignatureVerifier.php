@@ -17,6 +17,9 @@ class WebhookSignatureVerifier
 
     /**
      * Constant-time comparison of the provided X-Signature value.
+     *
+     * Accepts plain lowercase hex as well as the common `sha256=<hex>`
+     * prefix form (case-insensitive) some gateways send.
      */
     public function verify(string $rawBody, string $secret, ?string $provided): bool
     {
@@ -24,8 +27,17 @@ class WebhookSignatureVerifier
             return false;
         }
 
+        $clean = strtolower(trim($provided));
+        if (str_starts_with($clean, 'sha256=')) {
+            $clean = trim(substr($clean, strlen('sha256=')));
+        }
+
+        if ($clean === '') {
+            return false;
+        }
+
         $expected = $this->sign($rawBody, $secret);
 
-        return hash_equals($expected, strtolower(trim($provided)));
+        return hash_equals($expected, $clean);
     }
 }

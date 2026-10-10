@@ -16,7 +16,7 @@ Nama enum teknis di atas adalah proposal. API dapat memakai label Indonesia jika
 | paid | payment.success duplikat | paid | Tidak membuat transaksi finansial duplikat |
 | paid | payment.expired terlambat | paid | Jangan menurunkan status pembayaran |
 | expired | payment.expired duplikat | expired | Idempotent |
-| expired | payment.success terlambat | perlu keputusan | Kebijakan harus ditulis dan diuji |
+| expired | payment.success terlambat | ignored `success_after_expiry` | Final: invoice lewat `expires_at` secara waktu pun di-expire + di-ignore tanpa baris transaksi |
 
 ## Aturan implementasi
 - Jangan mengubah status berdasarkan event type saja.
@@ -25,6 +25,7 @@ Nama enum teknis di atas adalah proposal. API dapat memakai label Indonesia jika
 - Audit receipt tetap merekam event yang ditolak atau duplikat.
 - Pertimbangkan konkurensi: dua webhook bisa diproses bersamaan.
 - Tentukan apakah expiry time sendiri memengaruhi status atau status hanya berubah saat event gateway diterima. Brief belum sepenuhnya mendefinisikan hal ini.
+- Final (audit-gap fix): `payment.success` untuk invoice `unpaid` yang sudah lewat `expires_at` secara waktu di-expire di tempat dan di-`ignored 200 success_after_expiry` tanpa baris `payment_transactions` — uang tidak pernah bergerak untuk tagihan kedaluwarsa-waktu.
 
 ## Acceptance criteria
 1. Webhook valid `payment.success` untuk invoice `unpaid` menjadikan status `paid`.

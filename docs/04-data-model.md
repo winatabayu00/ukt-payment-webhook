@@ -8,7 +8,7 @@
 | `id` | Primary key | bigint/UUID, pilih konsisten |
 | `name` | Nama institusi | required |
 | `code` | Kode institusi untuk routing webhook | unique |
-| `webhook_secret` | Secret untuk HMAC | simpan terenkripsi/di secret manager; tidak boleh plaintext di repo |
+| `webhook_secret` | Secret untuk HMAC | simpan terenkripsi/di secret manager; tidak boleh plaintext di repo; rotasi via `institution:webhook-secret` |
 | `api_token_hash` | SHA-256 hash token API per institusi | unique, nullable untuk baris lama; plaintext tidak pernah disimpan; issue/rotasi via `php artisan institution:token <CODE>` |
 | `created_at`, `updated_at` | Audit waktu | standar Laravel |
 
@@ -40,7 +40,7 @@ Indeks kandidat: `(institution_id, student_number)`, `(institution_id, semester)
 | `gateway_transaction_id` | ID transaksi gateway | unique scope perlu dipastikan |
 | `event_type` | Jenis event sah yang diproses | misalnya `payment.success` |
 | `amount` | Nominal event bila tersedia | cocokkan terhadap invoice |
-| `occurred_at` | Waktu event dari gateway bila tersedia | opsional (null bila absen); nilai yang ada tapi tak parseable di-reject 422 |
+| `occurred_at` | Waktu event dari gateway bila tersedia | opsional (null bila absen); nilai yang ada tapi tak parseable di-reject 422; di luar jendela staleness (default 30 hari lalu / 15 mnt depan) di-reject 422 |
 | `created_at` | Waktu diterima/disimpan | |
 
 Keputusan deduplikasi tergantung apakah payload gateway menyediakan `event_id` atau `gateway_transaction_id`. Jangan menambahkan unique global tanpa memeriksa aturan scope gateway.
@@ -54,7 +54,7 @@ Keputusan deduplikasi tergantung apakah payload gateway menyediakan `event_id` a
 | `event_type` | Event yang diterima jika dapat dibaca | nullable |
 | `signature_valid` | Hasil verifikasi | nullable saat tidak dapat dievaluasi |
 | `processing_status` | received/processed/rejected/failed | nilai final didefinisikan di kode |
-| `payload_redacted` | Payload audit yang aman | redaksi data sensitif |
+| `payload_redacted` | Payload audit yang aman | recursive redact at any depth; retention via `webhook:prune` |
 | `failure_reason` | Kategori alasan gagal | jangan simpan secret/header rahasia |
 | `received_at` | Waktu penerimaan | |
 | `processed_at` | Waktu selesai diproses | nullable |

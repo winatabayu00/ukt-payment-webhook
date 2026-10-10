@@ -142,6 +142,16 @@ Perilaku yang terverifikasi:
   failures terbaru (`rejected` + `failed` dengan `failure_reason`),
   `jobs pending` + `failed_jobs` + entri `failed_jobs` terbaru,
   warning bila ada failed receipt/job (atau `OK` bila bersih).
+- Retensi audit: `php artisan webhook:prune [--days=N] [--include-failed] [--dry-run]`
+  menghapus receipts terminal lama (default N dari `WEBHOOK_RECEIPT_RETENTION_DAYS=90`
+  via `config/api.php`); `failed` dipertahankan default (investigasi), invoices/transactions
+  tidak pernah tersentuh.
+- Rotasi secret webhook: `php artisan institution:webhook-secret <CODE> [--rotate] [--secret=...]`
+  (encrypted at-rest, plaintext dicetak sekali → distribusikan ke gateway out-of-band).
+- Jendela `occurred_at` (tolak `422` di luar window, uang tidak bergerak): default max
+  30 hari lalu / 15 mnt depan via `WEBHOOK_OCCURRED_AT_MAX_PAST_DAYS` /
+  `WEBHOOK_OCCURRED_AT_MAX_FUTURE_MINUTES` (`config/api.php`, overridable per env).
+  `sha256=<hex>` diterima untuk `X-Signature`; redact `payload_redacted` rekursif.
 
 Verified live (throwaway sqlite, `scripts/demo.sh` + worker):
 

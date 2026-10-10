@@ -25,7 +25,8 @@ Risiko utama pada brief:
 
 ## Webhook security
 - Resolve institusi dengan `institution_code`.
-- Verifikasi HMAC-SHA256 atas representasi payload yang tepat.
+- Verifikasi HMAC-SHA256 atas representasi payload yang tepat (raw body; header `X-Signature` plain hex atau `sha256=<hex>`, case-insensitive).
+- Rotasi secret via `php artisan institution:webhook-secret <CODE> [--rotate]` (encrypted at-rest); retensi receipt via `php artisan webhook:prune [--days=N] [--include-failed] [--dry-run]` (failed dipertahankan default).
 - Gunakan constant-time comparison.
 - Tolak signature invalid sebelum domain side effects.
 - Validasi tipe event dan field.
@@ -41,6 +42,8 @@ Risiko utama pada brief:
 - `.env.example` hanya berisi placeholder.
 - Jangan menaruh secret dalam test fixtures, dokumentasi, screenshot, atau output CI.
 - Karena HMAC memerlukan secret asli, hash satu arah tidak cukup; gunakan enkripsi/secret manager dengan kunci terpisah.
+- `occurred_at` gateway di luar jendela staleness (default 30 hari lalu / 15 mnt depan, `config/api.php`) di-reject `422` agar replay/stale feed dan clock buruk tidak menggerakkan uang.
+- Redaksi `payload_redacted` rekursif di semua kedalaman; receipts terminal lama di-prune (`webhook:prune`, `WEBHOOK_RECEIPT_RETENTION_DAYS` default 90).
 - Rotasi secret dan versi key berada di luar detail brief, tetapi dapat menjadi catatan future work.
 
 ## Audit log
