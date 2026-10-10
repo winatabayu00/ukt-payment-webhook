@@ -9,8 +9,14 @@ Risiko utama pada brief:
 - Event duplikat atau tidak berurutan menyebabkan status keliru.
 
 ## Tenant context
-- Bentuk tenant context dari autentikasi/credential tepercaya.
-- Brief tidak mendefinisikan mekanisme auth; pilih dan dokumentasikan mekanisme yang proporsional untuk tes.
+- Invoice API autentikasi dengan token per institusi: header
+  `Authorization: Bearer <api-token>`, di-resolve oleh `ResolveInstitution`.
+  Hanya hash SHA-256 yang disimpan (`institutions.api_token_hash`, unique);
+  plaintext tidak pernah disimpan, didistribusikan out-of-band, dirotasi via
+  `php artisan institution:token <CODE> [--rotate]`. Hilang → `401
+  INSTITUTION_UNRESOLVED`, tidak dikenal/dicabut → `401 INSTITUTION_UNKNOWN`.
+- Brief tidak mendefinisikan mekanisme auth; mekanisme token di atas adalah
+  pilihan proporsional yang terdokumentasi untuk tes (OAuth/IdP future work).
 - Jangan mengandalkan `institution_id` dari request body/query sebagai otorisasi.
 - Setiap query invoice/transaction harus dibatasi pada institusi aktif.
 - Semua resource yang diturunkan dari ID harus tetap memeriksa kepemilikan tenant.
@@ -24,7 +30,10 @@ Risiko utama pada brief:
 - Tolak signature invalid sebelum domain side effects.
 - Validasi tipe event dan field.
 - Pertimbangkan replay/idempotency; timestamp saja tidak cukup kecuali ada kebijakan freshness dan clock skew.
-- Rate limiting dan batas ukuran request dapat ditambahkan bila sesuai.
+- Rate limiting aktif: invoice `throttle:api-invoices` per token per menit
+  (`API_INVOICE_RATE_LIMIT`, default 60, `config/api.php` + `AppServiceProvider`),
+  webhook `throttle:api-webhooks` per IP per menit (`API_WEBHOOK_RATE_LIMIT`,
+  default 300) → `429` bila lewat.
 - Hindari membocorkan apakah invoice/tenant ada melalui error detail yang tidak diperlukan.
 
 ## Secret handling

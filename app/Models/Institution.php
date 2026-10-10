@@ -11,11 +11,25 @@ class Institution extends Model
         'name',
         'code',
         'webhook_secret',
+        'api_token_hash',
+    ];
+
+    protected $hidden = [
+        'webhook_secret',
+        'api_token_hash',
     ];
 
     protected $casts = [
         'webhook_secret' => 'encrypted',
     ];
+
+    /**
+     * Hash a plaintext API token the same way it is stored.
+     */
+    public static function apiTokenHash(string $token): string
+    {
+        return hash('sha256', $token);
+    }
 
     public function invoices(): HasMany
     {

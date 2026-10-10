@@ -8,39 +8,38 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Resolve the current institution (tenant) from the trusted
- * X-Institution-Code credential header.
+ * Resolve the current institution (tenant) from its per-institution
+ * API token, presented as an `Authorization: Bearer <token>` header.
  *
- * This is a demo-grade credential mechanism for the technical test:
- * in production this must be replaced by real authentication (tokens,
- * signatures, or an identity provider). The institution resolved here
- * is the only tenant scope used by the invoice API; any institution_id
+ * Only the SHA-256 hash of the token is stored (institutions.api_token_hash);
+ * the plaintext token is never persisted and must be distributed to the
+ * institution out of band, then rotated if leaked. The institution resolved
+ * here is the only tenant scope used by the invoice API; any institution_id
  * supplied in the request body is ignored.
  */
 class ResolveInstitution
 {
-    public const HEADER = 'X-Institution-Code';
-
     public function handle(Request $request, Closure $next): Response
     {
-        $code = $request->header(self::HEADER);
+        $token = $request->bearerToken();
 
-        if (! is_string($code) || trim($code) === '') {
+        if (! is_string($token) || trim($token) === '') {
             return response()->json([
                 'error' => [
                     'code' => 'INSTITUTION_UNRESOLVED',
-                    'message' => 'Missing '.self::HEADER.' header.',
+                    'message' => 'Missing Authorization: Bearer <api-token> header.',
                 ],
             ], 401);
         }
 
-        $institution = Institution::where('code', trim($code))->first();
+        $candidate = Institution::apiTokenHash(trim($token));
+        $institution = Institution::where('api_token_hash', $candidate)->first();
 
-        if (! $institution) {
+        if (! $institution || ! hash_equals((string) $institution->api_token_hash, $candidate)) {
             return response()->json([
                 'error' => [
                     'code' => 'INSTITUTION_UNKNOWN',
-                    'message' => 'Unknown institution.',
+                    'message' => 'Unknown or revoked API token.',
                 ],
             ], 401);
         }

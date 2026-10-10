@@ -15,6 +15,10 @@ class InvoiceTenantIsolationTest extends TestCase
 
     private Institution $beta;
 
+    private string $alphaToken = 'test-token-alpha';
+
+    private string $betaToken = 'test-token-beta';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -23,12 +27,22 @@ class InvoiceTenantIsolationTest extends TestCase
             'name' => 'Kampus Alpha',
             'code' => 'CAMPUS-ALPHA',
             'webhook_secret' => 'test-secret-alpha',
+            'api_token_hash' => Institution::apiTokenHash($this->alphaToken),
         ]);
         $this->beta = Institution::create([
             'name' => 'Kampus Beta',
             'code' => 'CAMPUS-BETA',
             'webhook_secret' => 'test-secret-beta',
+            'api_token_hash' => Institution::apiTokenHash($this->betaToken),
         ]);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function auth(string $token): array
+    {
+        return ['Authorization' => 'Bearer '.$token];
     }
 
     private function invoicePayload(string $invoiceNumber = 'INV-001'): array
@@ -42,26 +56,36 @@ class InvoiceTenantIsolationTest extends TestCase
         ];
     }
 
-    public function test_missing_institution_header_is_rejected(): void
+    public function test_missing_bearer_token_is_rejected(): void
     {
         $this->postJson('/api/invoices', $this->invoicePayload())
             ->assertStatus(401)
             ->assertJsonPath('error.code', 'INSTITUTION_UNRESOLVED');
     }
 
-    public function test_unknown_institution_code_is_rejected(): void
+    public function test_unknown_bearer_token_is_rejected(): void
     {
-        $this->postJson('/api/invoices', $this->invoicePayload(), [
-            'X-Institution-Code' => 'NOPE',
-        ])->assertStatus(401)
+        $this->postJson('/api/invoices', $this->invoicePayload(), $this->auth('bogus-token'))
+            ->assertStatus(401)
             ->assertJsonPath('error.code', 'INSTITUTION_UNKNOWN');
+    }
+
+    public function test_plaintext_token_is_never_stored(): void
+    {
+        $this->assertDatabaseMissing('institutions', [
+            'code' => 'CAMPUS-ALPHA',
+            'api_token_hash' => $this->alphaToken,
+        ]);
+        $this->assertSame(
+            Institution::apiTokenHash($this->alphaToken),
+            $this->alpha->fresh()->api_token_hash
+        );
     }
 
     public function test_create_invoice_is_scoped_to_resolved_institution(): void
     {
-        $response = $this->postJson('/api/invoices', $this->invoicePayload('INV-A1'), [
-            'X-Institution-Code' => 'CAMPUS-ALPHA',
-        ])->assertStatus(201);
+        $response = $this->postJson('/api/invoices', $this->invoicePayload('INV-A1'), $this->auth($this->alphaToken))
+            ->assertStatus(201);
 
         $response->assertJsonPath('data.invoice_number', 'INV-A1');
         $response->assertJsonPath('data.status', 'unpaid');
@@ -74,19 +98,16 @@ class InvoiceTenantIsolationTest extends TestCase
 
     public function test_invoice_number_unique_per_institution_but_reusable_across_tenants(): void
     {
-        $this->postJson('/api/invoices', $this->invoicePayload('INV-DUP'), [
-            'X-Institution-Code' => 'CAMPUS-ALPHA',
-        ])->assertStatus(201);
+        $this->postJson('/api/invoices', $this->invoicePayload('INV-DUP'), $this->auth($this->alphaToken))
+            ->assertStatus(201);
 
         // Same number, same tenant: rejected.
-        $this->postJson('/api/invoices', $this->invoicePayload('INV-DUP'), [
-            'X-Institution-Code' => 'CAMPUS-ALPHA',
-        ])->assertStatus(422);
+        $this->postJson('/api/invoices', $this->invoicePayload('INV-DUP'), $this->auth($this->alphaToken))
+            ->assertStatus(422);
 
         // Same number, other tenant: allowed.
-        $this->postJson('/api/invoices', $this->invoicePayload('INV-DUP'), [
-            'X-Institution-Code' => 'CAMPUS-BETA',
-        ])->assertStatus(201);
+        $this->postJson('/api/invoices', $this->invoicePayload('INV-DUP'), $this->auth($this->betaToken))
+            ->assertStatus(201);
 
         $this->assertEquals(1, Invoice::where('institution_id', $this->alpha->id)->where('invoice_number', 'INV-DUP')->count());
         $this->assertEquals(1, Invoice::where('institution_id', $this->beta->id)->where('invoice_number', 'INV-DUP')->count());
@@ -104,13 +125,11 @@ class InvoiceTenantIsolationTest extends TestCase
             'status' => 'unpaid',
         ]);
 
-        $this->getJson("/api/invoices/{$invoice->id}", [
-            'X-Institution-Code' => 'CAMPUS-ALPHA',
-        ])->assertStatus(200)->assertJsonPath('data.invoice_number', 'INV-X1');
+        $this->getJson("/api/invoices/{$invoice->id}", $this->auth($this->alphaToken))
+            ->assertStatus(200)->assertJsonPath('data.invoice_number', 'INV-X1');
 
-        $this->getJson("/api/invoices/{$invoice->id}", [
-            'X-Institution-Code' => 'CAMPUS-BETA',
-        ])->assertStatus(404)->assertJsonPath('error.code', 'NOT_FOUND');
+        $this->getJson("/api/invoices/{$invoice->id}", $this->auth($this->betaToken))
+            ->assertStatus(404)->assertJsonPath('error.code', 'NOT_FOUND');
     }
 
     public function test_student_invoices_are_tenant_scoped(): void
@@ -136,14 +155,12 @@ class InvoiceTenantIsolationTest extends TestCase
             'status' => 'unpaid',
         ]);
 
-        $alpha = $this->getJson('/api/students/99001/invoices', [
-            'X-Institution-Code' => 'CAMPUS-ALPHA',
-        ])->assertStatus(200);
+        $alpha = $this->getJson('/api/students/99001/invoices', $this->auth($this->alphaToken))
+            ->assertStatus(200);
         $this->assertEquals(2, $alpha->json('meta.total'));
 
-        $beta = $this->getJson('/api/students/99001/invoices', [
-            'X-Institution-Code' => 'CAMPUS-BETA',
-        ])->assertStatus(200);
+        $beta = $this->getJson('/api/students/99001/invoices', $this->auth($this->betaToken))
+            ->assertStatus(200);
         $this->assertEquals(1, $beta->json('meta.total'));
     }
 
@@ -159,12 +176,10 @@ class InvoiceTenantIsolationTest extends TestCase
             'status' => 'unpaid',
         ]);
 
-        $this->getJson("/api/invoices/{$invoice->id}/transactions", [
-            'X-Institution-Code' => 'CAMPUS-ALPHA',
-        ])->assertStatus(200)->assertJsonPath('data', []);
+        $this->getJson("/api/invoices/{$invoice->id}/transactions", $this->auth($this->alphaToken))
+            ->assertStatus(200)->assertJsonPath('data', []);
 
-        $this->getJson("/api/invoices/{$invoice->id}/transactions", [
-            'X-Institution-Code' => 'CAMPUS-BETA',
-        ])->assertStatus(404);
+        $this->getJson("/api/invoices/{$invoice->id}/transactions", $this->auth($this->betaToken))
+            ->assertStatus(404);
     }
 }

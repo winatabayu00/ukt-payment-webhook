@@ -9,6 +9,7 @@
 | `name` | Nama institusi | required |
 | `code` | Kode institusi untuk routing webhook | unique |
 | `webhook_secret` | Secret untuk HMAC | simpan terenkripsi/di secret manager; tidak boleh plaintext di repo |
+| `api_token_hash` | SHA-256 hash token API per institusi | unique, nullable untuk baris lama; plaintext tidak pernah disimpan; issue/rotasi via `php artisan institution:token <CODE>` |
 | `created_at`, `updated_at` | Audit waktu | standar Laravel |
 
 Secret harus dapat dipulihkan untuk menghitung HMAC; hash satu arah saja tidak cukup. Pilih enkripsi at-rest dan kunci enkripsi dari environment/secret manager, atau strategi secret management yang sesuai.

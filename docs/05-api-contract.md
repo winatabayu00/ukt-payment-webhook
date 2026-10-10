@@ -11,7 +11,9 @@
 - Autentikasi pengguna/tenant belum ditentukan oleh brief; jangan menganggap endpoint privat aman sebelum mekanisme itu dipilih.
 
 ## 1. Membuat invoice
-`POST /api/invoices`
+`POST /api/invoices` — auth: `Authorization: Bearer <api-token>` per institusi
+(`ResolveInstitution`, 401 tanpa/kredensial salah); throttle `api-invoices`
+per token per menit (default 60 via `API_INVOICE_RATE_LIMIT`) → `429` bila lewat.
 
 Request proposal:
 ```json

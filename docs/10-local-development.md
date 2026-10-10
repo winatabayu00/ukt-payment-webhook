@@ -99,6 +99,18 @@ Laravel akan memakai shell env itu (bukan `.env`). Jalankan artisan dengan
 - Secret webhook demo hanya untuk lokal dan tidak boleh dianggap secret produksi.
 - Tambahkan file `.env` ke `.gitignore` dan periksa status Git sebelum commit.
 
+## Konfigurasi produksi (template)
+- Template: `.env.production.example` (`APP_ENV=production`, `APP_DEBUG=false`,
+  pgsql placeholders, tanpa secret). Isi kredensial asli via secret
+  manager/env di host, jangan pernah commit.
+- Checklist deploy ada di header file template: `APP_KEY` via
+  `php artisan key:generate --show`, `migrate --force` (jangan pernah
+  `migrate:fresh` di data prod), seed institusi TANPA secret demo lalu
+  `php artisan institution:token <CODE>` per institusi dan distribusikan
+  plaintext out-of-band, serve di belakang TLS + reverse proxy.
+- Rate limit prod dapat dioverride via `API_INVOICE_RATE_LIMIT` /
+  `API_WEBHOOK_RATE_LIMIT` tanpa ubah kode.
+
 ## Docker Compose
 Jika digunakan, sediakan service app dan database dengan volume/healthcheck yang jelas. Jangan menyimpan password produksi dalam compose file. Dokumentasikan port dan cara reset database.
 

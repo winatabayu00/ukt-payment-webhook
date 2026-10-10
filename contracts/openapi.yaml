@@ -1,26 +1,30 @@
 openapi: 3.0.3
 info:
   title: UKT Payment API
-  version: 1.0.0
+  version: 1.1.0
   description: >
-    Reconciled with the verified Laravel implementation (Phase 1).
-    Tenant for invoice APIs is resolved from the X-Institution-Code header
-    via ResolveInstitution; webhook tenant comes from payload.institution_code
-    plus HMAC-SHA256 X-Signature over the raw body. sqlite is the verified
-    local/test driver; pgsql env placeholders are user-managed.
+    Reconciled with the verified Laravel implementation (Phase 1 + prod hardening).
+    Tenant for invoice APIs is resolved from a per-institution API token in the
+    Authorization: Bearer header via ResolveInstitution (only the SHA-256 hash is
+    stored in institutions.api_token_hash); webhook tenant comes from
+    payload.institution_code plus HMAC-SHA256 X-Signature over the raw body.
+    sqlite is the verified local/test driver; pgsql env placeholders are
+    user-managed. Invoice routes throttle per token, webhook per IP.
+components:
+  securitySchemes:
+    institutionToken:
+      type: http
+      scheme: bearer
+      description: Per-institution API token (plaintext never stored; only SHA-256). Issue via `php artisan institution:token <CODE>`. Missing/unknown yields 401.
 servers:
   - url: /api
 paths:
   /invoices:
     post:
       summary: Create a UKT invoice in the resolved institution
-      parameters:
-        - in: header
-          name: X-Institution-Code
-          required: true
-          schema:
-            type: string
-          description: Demo-grade tenant credential (e.g. CAMPUS-ALPHA). Missing/unknown yields 401.
+      security:
+        - institutionToken: []
+      parameters: []
       requestBody:
         required: true
         content:
@@ -51,18 +55,17 @@ paths:
         "201":
           description: Invoice created (status unpaid).
         "401":
-          description: Missing/unknown X-Institution-Code (INSTITUTION_UNRESOLVED / INSTITUTION_UNKNOWN).
+          description: Missing/unknown Bearer API token (INSTITUTION_UNRESOLVED / INSTITUTION_UNKNOWN).
         "422":
           description: Validation failed, including duplicate invoice_number within this institution.
+        "429":
+          description: Rate limit exceeded (throttle:api-invoices, per token per minute).
   /invoices/{invoiceId}:
     get:
       summary: Get invoice status/details within the resolved institution
+      security:
+        - institutionToken: []
       parameters:
-        - in: header
-          name: X-Institution-Code
-          required: true
-          schema:
-            type: string
         - in: path
           name: invoiceId
           required: true
@@ -75,15 +78,14 @@ paths:
           description: Missing/unknown institution.
         "404":
           description: Not found or not visible within the current tenant (cross-tenant hidden as NOT_FOUND).
+        "429":
+          description: Rate limit exceeded.
   /invoices/{invoiceId}/transactions:
     get:
       summary: List payment transactions for an invoice (tenant-scoped)
+      security:
+        - institutionToken: []
       parameters:
-        - in: header
-          name: X-Institution-Code
-          required: true
-          schema:
-            type: string
         - in: path
           name: invoiceId
           required: true
@@ -96,15 +98,14 @@ paths:
           description: Missing/unknown institution.
         "404":
           description: Not found or cross-tenant (NOT_FOUND).
+        "429":
+          description: Rate limit exceeded.
   /students/{studentNumber}/invoices:
     get:
       summary: List invoices for a student in the resolved institution (paginated)
+      security:
+        - institutionToken: []
       parameters:
-        - in: header
-          name: X-Institution-Code
-          required: true
-          schema:
-            type: string
         - in: path
           name: studentNumber
           required: true
@@ -115,6 +116,8 @@ paths:
           description: Paginated invoice list (15 per page) with data[] plus meta.current_page/per_page/total.
         "401":
           description: Missing/unknown institution.
+        "429":
+          description: Rate limit exceeded.
   /webhooks/payments:
     post:
       summary: Receive payment gateway event (HMAC-verified, audited, idempotent)
@@ -171,3 +174,5 @@ paths:
           description: institution_unknown or signature_invalid. Every delivery is still audited in webhook_receipts.
         "422":
           description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch.
+        "429":
+          description: Rate limit exceeded (throttle:api-webhooks, per IP per minute).

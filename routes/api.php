@@ -5,11 +5,13 @@ use App\Http\Controllers\Api\PaymentWebhookController;
 use App\Http\Controllers\Api\StudentInvoiceController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('institution.resolve')->group(function () {
+Route::middleware(['institution.resolve', 'throttle:api-invoices'])->group(function () {
     Route::post('/invoices', [InvoiceController::class, 'store']);
     Route::get('/invoices/{invoice}', [InvoiceController::class, 'show']);
     Route::get('/invoices/{invoice}/transactions', [InvoiceController::class, 'transactions']);
     Route::get('/students/{studentNumber}/invoices', [StudentInvoiceController::class, 'index']);
 });
 
-Route::post('/webhooks/payments', [PaymentWebhookController::class, 'handle']);
+Route::middleware('throttle:api-webhooks')->group(function () {
+    Route::post('/webhooks/payments', [PaymentWebhookController::class, 'handle']);
+});

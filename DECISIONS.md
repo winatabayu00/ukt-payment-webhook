@@ -1,18 +1,18 @@
-# Technical Decisions (Final — Phase 1 verified)
+# Technical Decisions (Final — Phase 1 verified + prod hardening)
 
-Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (22 tests, 87 assertions)` on sqlite `:memory:`. pgsql is user-managed via `.env.example` placeholders.
+Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (29 tests, 111 assertions)` on sqlite `:memory:`. pgsql is user-managed via `.env.example` placeholders; prod template in `.env.production.example`.
 
 ## 1. Modular monolith Laravel — FINAL
 **Options:** (A) modular monolith, (B) microservices, (C) unstructured controllers.
 **Chosen:** A. One Laravel app; thin controllers (`Api/InvoiceController`, `Api/StudentInvoiceController`, `Api/PaymentWebhookController`), `StoreInvoiceRequest` validation, services (`InvoiceService`, `PaymentWebhookProcessor`, `InvoiceStateMachine`, `WebhookSignatureVerifier`), Eloquent models, `institution.resolve` middleware.
 **Why:** Matches 10–14h scope; single deploy/test; no ops need for microservices.
-**Verified:** `route:list` 9 routes (4 tenant invoice + 1 webhook + `/up`); full suite green.
+**Verified:** `route:list` 9 routes (4 tenant invoice + 1 webhook + `/up`); invoice group carries `throttle:api-invoices` (per token/minute, `config/api.php` → `API_INVOICE_RATE_LIMIT=60`), webhook carries `throttle:api-webhooks` (per IP/minute, `API_WEBHOOK_RATE_LIMIT=300`); full suite green.
 
 ## 2. Explicit tenant isolation — FINAL
 **Options:** (A) trusted tenant context + `institution_id` filters, (B) client-supplied `institution_id`, (C) DB per tenant.
-**Chosen:** A. `ResolveInstitution` resolves from demo-grade `X-Institution-Code` header (missing → `401 INSTITUTION_UNRESOLVED`, unknown → `401 INSTITUTION_UNKNOWN`); `Invoice::scopeForInstitution` / `forInstitution`; `show/transactions` hide cross-tenant as `404 NOT_FOUND`; webhook resolves invoice strictly by payload `institution_code` (`forInstitution`); `unique(institution_id, invoice_number)` in migration + `Rule::unique->where(institution_id)` + 409-style `422` on race.
+**Chosen:** A. `ResolveInstitution` resolves the tenant from a per-institution API token in the `Authorization: Bearer <token>` header (missing → `401 INSTITUTION_UNRESOLVED`, unknown/revoked → `401 INSTITUTION_UNKNOWN`); only the SHA-256 hash is stored (`institutions.api_token_hash`, unique, nullable for pre-existing rows), compared with `hash_equals`. Tokens are issued/rotated via `php artisan institution:token <CODE> [--rotate]` (plaintext printed once, distributed out of band). `Invoice::scopeForInstitution` / `forInstitution`; `show/transactions` hide cross-tenant as `404 NOT_FOUND`; webhook resolves invoice strictly by payload `institution_code` (`forInstitution`); `unique(institution_id, invoice_number)` in migration + `Rule::unique->where(institution_id)` + 409-style `422` on race.
 **Why:** Single-DB brief requirement; prevents arbitrary tenant selection.
-**Verified:** `InvoiceTenantIsolationTest` (7) + webhook tenant test (`INV-SHARED` ALPHA paid, BETA stays unpaid).
+**Verified:** `InvoiceTenantIsolationTest` (8: missing/unknown Bearer `401`, plaintext never stored, scoped create, dup rules, cross-tenant `404`s) + webhook tenant test (`INV-SHARED` ALPHA paid, BETA stays unpaid).
 
 ## 3. Verified atomic webhook — FINAL
 **Options:** (A) verify → audit → transact, (B) mutate before verify, (C) split writes.
@@ -27,5 +27,11 @@ Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (22 tests, 87 a
 ## 5. Relational DB with domain constraints, sqlite-verified — FINAL
 **Options:** (A) PostgreSQL, (B) MySQL, (C) non-relational.
 **Chosen:** Relational with sqlite as verified local/test driver (`DB_CONNECTION=sqlite`, file ignored); pgsql placeholders in `.env.example` (`DB_HOST=127.0.0.1:5432`, `DB_DATABASE=ukt_payment`, user-managed creds). C rejected (needs FK/unique/tx).
-**Migrations:** `000001 institutions(code unique, webhook_secret encrypted cast)`; `000002 invoices(unique institution_id+invoice_number, indexes student/semester/status)`; `000003 payment_transactions(unique institution_id+gateway_transaction_id)`; `000004 webhook_receipts(index institution_id+event_id, redacted JSON, received/processed_at)`. Seed 3 demo institutions (`CAMPUS-ALPHA/BETA/GAMMA`).
+**Migrations:** `000001 institutions(code unique, webhook_secret encrypted cast)`; `000002 invoices(unique institution_id+invoice_number, indexes student/semester/status)`; `000003 payment_transactions(unique institution_id+gateway_transaction_id)`; `000004 webhook_receipts(index institution_id+event_id, redacted JSON, received/processed_at)`; `000005 institutions.api_token_hash (nullable unique sha256, backfilled for seeded demo tokens)`. Seed 3 demo institutions (`CAMPUS-ALPHA/BETA/GAMMA`) with demo Bearer tokens `demo-token-{alpha,beta,gamma}-please-rotate` (hash only stored; rotate in real envs via `institution:token`).
 **Verified:** `migrate:fresh --force --seed` 7 DONE + 3 institutions; suite green on `:memory:`.
+
+## 6. Production hardening (auth, throttle, prod config) — FINAL
+**Options:** (A) per-institution Bearer API token + throttle + prod env template, (B) keep demo header + external gateway auth, (C) full OAuth/IdP now.
+**Chosen:** A. Real per-institution token auth on all invoice endpoints; HMAC webhook verification + replay protection untouched; per-token invoice throttle + per-IP webhook throttle; `.env.production.example` (`APP_ENV=production`, `APP_DEBUG=false`, pgsql placeholders only, no secrets) + rotation command + docs/contract updates.
+**Why:** Closes the demo-credential gap with minimal scope (no business-logic change, no new infra); OAuth/IdP deferred as out-of-scope per task.
+**Verified:** suite `OK (29 tests, 111 assertions)`; manual `401` without credential confirmed; `429` limiters registered in `route:list`; prod template contains no dev defaults and no secrets.

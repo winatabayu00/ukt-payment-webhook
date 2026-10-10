@@ -83,9 +83,12 @@ done
 pass "GET /up -> 200"
 
 EXPIRES_AT="$(php -r 'echo date("c", time() + 86400 * 30);')"
+# Seeded demo plaintext token for CAMPUS-ALPHA (only its SHA-256 is stored).
+DEMO_TOKEN="${DEMO_TOKEN:-demo-token-alpha-please-rotate}"
+auth_header() { printf 'Authorization: Bearer %s' "$DEMO_TOKEN"; }
 create_invoice() { # student semester number amount
   curl -s -w '\n%{http_code}' -X POST "$BASE/api/invoices" \
-    -H 'Content-Type: application/json' -H 'X-Institution-Code: CAMPUS-ALPHA' \
+    -H 'Content-Type: application/json' -H "$(auth_header)" \
     -d "{\"student_number\":\"$1\",\"semester\":\"$2\",\"invoice_number\":\"$3\",\"amount\":\"$4\",\"expires_at\":\"$EXPIRES_AT\"}"
 }
 
@@ -121,10 +124,10 @@ echo "$OUT" | grep -q '"processing_status":"processed"' || fail "expired webhook
 pass "expired -> 200 processed"
 
 echo "-- verify final invoice statuses"
-OUT="$(curl -s "$BASE/api/invoices/1" -H 'X-Institution-Code: CAMPUS-ALPHA')"
+OUT="$(curl -s "$BASE/api/invoices/1" -H "$(auth_header)")"
 echo "$OUT" | grep -q '"status":"paid"' || fail "INV-DEMO-001 not paid: $OUT"
 pass "INV-DEMO-001 status=paid"
-OUT="$(curl -s "$BASE/api/invoices/2" -H 'X-Institution-Code: CAMPUS-ALPHA')"
+OUT="$(curl -s "$BASE/api/invoices/2" -H "$(auth_header)")"
 echo "$OUT" | grep -q '"status":"expired"' || fail "INV-DEMO-002 not expired: $OUT"
 pass "INV-DEMO-002 status=expired"
 
