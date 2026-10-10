@@ -1,31 +1,68 @@
 openapi: 3.0.3
 info:
-  title: UKT Payment API (Proposal)
-  version: 0.1.0
+  title: UKT Payment API
+  version: 1.0.0
   description: >
-    Draft contract for planning only. Routes, authentication, payloads and
-    response codes must be reconciled with the actual Laravel implementation
-    and mock gateway before this file is treated as authoritative.
+    Reconciled with the verified Laravel implementation (Phase 1).
+    Tenant for invoice APIs is resolved from the X-Institution-Code header
+    via ResolveInstitution; webhook tenant comes from payload.institution_code
+    plus HMAC-SHA256 X-Signature over the raw body. sqlite is the verified
+    local/test driver; pgsql env placeholders are user-managed.
 servers:
   - url: /api
 paths:
   /invoices:
     post:
-      summary: Create a UKT invoice
-      description: Tenant must be resolved from trusted authentication context; do not trust tenant ID supplied by the caller.
+      summary: Create a UKT invoice in the resolved institution
+      parameters:
+        - in: header
+          name: X-Institution-Code
+          required: true
+          schema:
+            type: string
+          description: Demo-grade tenant credential (e.g. CAMPUS-ALPHA). Missing/unknown yields 401.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_number, semester, invoice_number, amount, expires_at]
+              properties:
+                student_number:
+                  type: string
+                  maxLength: 64
+                semester:
+                  type: string
+                  pattern: '^\d{4}-[12]$'
+                  example: 2026-1
+                invoice_number:
+                  type: string
+                  maxLength: 64
+                  description: Unique per institution_id; reusable across institutions.
+                amount:
+                  type: string
+                  example: "1500000.00"
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: Must be after now.
       responses:
         "201":
-          description: Invoice created
+          description: Invoice created (status unpaid).
         "401":
-          description: Authentication required, if applicable
+          description: Missing/unknown X-Institution-Code (INSTITUTION_UNRESOLVED / INSTITUTION_UNKNOWN).
         "422":
-          description: Validation failed
-        "409":
-          description: Invoice number conflicts within this institution
+          description: Validation failed, including duplicate invoice_number within this institution.
   /invoices/{invoiceId}:
     get:
-      summary: Get invoice status/details
+      summary: Get invoice status/details within the resolved institution
       parameters:
+        - in: header
+          name: X-Institution-Code
+          required: true
+          schema:
+            type: string
         - in: path
           name: invoiceId
           required: true
@@ -33,13 +70,41 @@ paths:
             type: string
       responses:
         "200":
-          description: Invoice details
+          description: Invoice details (id as string, amount as 2dp string, expires_at ISO8601, status unpaid|paid|expired).
+        "401":
+          description: Missing/unknown institution.
         "404":
-          description: Not found or not visible within the current tenant
+          description: Not found or not visible within the current tenant (cross-tenant hidden as NOT_FOUND).
+  /invoices/{invoiceId}/transactions:
+    get:
+      summary: List payment transactions for an invoice (tenant-scoped)
+      parameters:
+        - in: header
+          name: X-Institution-Code
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: invoiceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ordered transaction list (possibly empty). Each item has id, gateway_transaction_id, event_type, amount, occurred_at.
+        "401":
+          description: Missing/unknown institution.
+        "404":
+          description: Not found or cross-tenant (NOT_FOUND).
   /students/{studentNumber}/invoices:
     get:
-      summary: List invoices for a student in the current institution
+      summary: List invoices for a student in the resolved institution (paginated)
       parameters:
+        - in: header
+          name: X-Institution-Code
+          required: true
+          schema:
+            type: string
         - in: path
           name: studentNumber
           required: true
@@ -47,31 +112,19 @@ paths:
             type: string
       responses:
         "200":
-          description: Student invoice list
-  /invoices/{invoiceId}/transactions:
-    get:
-      summary: List payment transactions for an invoice
-      parameters:
-        - in: path
-          name: invoiceId
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Transaction history
-        "404":
-          description: Not found or not visible within the current tenant
+          description: Paginated invoice list (15 per page) with data[] plus meta.current_page/per_page/total.
+        "401":
+          description: Missing/unknown institution.
   /webhooks/payments:
     post:
-      summary: Receive payment gateway event
+      summary: Receive payment gateway event (HMAC-verified, audited, idempotent)
       parameters:
         - in: header
           name: X-Signature
           required: true
           schema:
             type: string
-          description: HMAC-SHA256 signature; exact encoding and signed bytes must match mock gateway contract.
+          description: Lowercase hex HMAC-SHA256 over the raw request body using the institution webhook_secret; compared constant-time.
       requestBody:
         required: true
         content:
@@ -81,30 +134,40 @@ paths:
               required:
                 - institution_code
                 - event_type
+                - event_id
+                - invoice_number
+                - gateway_transaction_id
+                - amount
               properties:
                 institution_code:
                   type: string
+                  example: CAMPUS-ALPHA
                 event_type:
                   type: string
                   enum: [payment.success, payment.expired]
                 event_id:
                   type: string
-                  description: Optional in this draft; confirm whether mock gateway supplies it.
+                  description: Required; idempotency key scoped by institution_id.
                 invoice_number:
                   type: string
                 gateway_transaction_id:
                   type: string
+                  description: Unique per institution_id on payment_transactions; reuse returns duplicate 200.
                 amount:
                   type: string
+                  description: Must be numeric > 0; for payment.success must exactly match invoice amount else 422 amount_mismatch.
                 occurred_at:
                   type: string
                   format: date-time
+                  description: Optional; unparseable values stored as null.
       responses:
         "200":
-          description: Event accepted/processed or duplicate, according to final policy
+          description: >
+            processed (state moved), duplicate (event_id or gateway_transaction_id already seen),
+            or ignored (already_final / success_after_expiry). Body is {data:{processing_status,failure_reason}}.
         "400":
-          description: Malformed payload
+          description: Malformed JSON (MALFORMED_PAYLOAD) or institution_code_missing.
         "401":
-          description: Unknown institution or invalid signature, according to final policy
+          description: institution_unknown or signature_invalid. Every delivery is still audited in webhook_receipts.
         "422":
-          description: Validly signed event failed domain validation
+          description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch.
