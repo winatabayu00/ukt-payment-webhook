@@ -40,7 +40,7 @@ Indeks kandidat: `(institution_id, student_number)`, `(institution_id, semester)
 | `gateway_transaction_id` | ID transaksi gateway | unique scope perlu dipastikan |
 | `event_type` | Jenis event sah yang diproses | misalnya `payment.success` |
 | `amount` | Nominal event bila tersedia | cocokkan terhadap invoice |
-| `occurred_at` | Waktu event dari gateway bila tersedia | jangan dipercaya tanpa validasi |
+| `occurred_at` | Waktu event dari gateway bila tersedia | opsional (null bila absen); nilai yang ada tapi tak parseable di-reject 422 |
 | `created_at` | Waktu diterima/disimpan | |
 
 Keputusan deduplikasi tergantung apakah payload gateway menyediakan `event_id` atau `gateway_transaction_id`. Jangan menambahkan unique global tanpa memeriksa aturan scope gateway.

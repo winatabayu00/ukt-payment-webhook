@@ -167,7 +167,7 @@ paths:
                 occurred_at:
                   type: string
                   format: date-time
-                  description: Optional; unparseable values stored as null.
+                  description: Optional; absent or empty ⇒ stored as null. A present but unparseable value is rejected 422 occurred_at_invalid.
       responses:
         "200":
           description: >
@@ -179,7 +179,7 @@ paths:
         "401":
           description: institution_unknown or signature_invalid. Every delivery is still audited in webhook_receipts.
         "422":
-          description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch.
+          description: event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch, occurred_at_invalid.
         "429":
           description: Rate limit exceeded (throttle:api-webhooks, per IP per minute).
         "500":

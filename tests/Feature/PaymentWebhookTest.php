@@ -247,6 +247,49 @@ class PaymentWebhookTest extends TestCase
         $this->assertEquals(0, PaymentTransaction::count());
     }
 
+    public function test_unparseable_occurred_at_is_rejected(): void
+    {
+        $invoice = $this->createInvoice();
+
+        $response = $this->postWebhook($this->successPayload([
+            'event_id' => 'evt-bad-ts',
+            'gateway_transaction_id' => 'gw-bad-ts',
+            'occurred_at' => 'asal-teks-bukan-tanggal',
+        ]));
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('data.processing_status', 'rejected');
+        $response->assertJsonPath('data.failure_reason', 'occurred_at_invalid');
+
+        // No state movement, no money movement.
+        $this->assertEquals('unpaid', $invoice->fresh()->status->value);
+        $this->assertEquals(0, PaymentTransaction::count());
+
+        $receipt = WebhookReceipt::where('event_id', 'evt-bad-ts')->firstOrFail();
+        $this->assertEquals('rejected', $receipt->processing_status->value);
+        $this->assertEquals('occurred_at_invalid', $receipt->failure_reason);
+    }
+
+    public function test_missing_occurred_at_stays_nullable(): void
+    {
+        $invoice = $this->createInvoice();
+
+        $payload = $this->successPayload([
+            'event_id' => 'evt-no-ts',
+            'gateway_transaction_id' => 'gw-no-ts',
+        ]);
+        unset($payload['occurred_at']);
+
+        $response = $this->postWebhook($payload);
+
+        $response->assertStatus(200);
+        $response->assertJsonPath('data.processing_status', 'processed');
+        $this->assertEquals('paid', $invoice->fresh()->status->value);
+
+        $tx = PaymentTransaction::where('gateway_transaction_id', 'gw-no-ts')->firstOrFail();
+        $this->assertNull($tx->occurred_at);
+    }
+
     public function test_unknown_institution_is_rejected(): void
     {
         $response = $this->postWebhook($this->successPayload([

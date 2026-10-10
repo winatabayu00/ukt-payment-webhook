@@ -127,7 +127,15 @@ class PaymentWebhookProcessor
         }
         $amount = number_format((float) $amount, 2, '.', '');
 
-        $occurredAt = $this->parseDateTime($payload['occurred_at'] ?? null);
+        $occurredAtRaw = $payload['occurred_at'] ?? null;
+        $occurredAt = $this->parseDateTime($occurredAtRaw);
+
+        // occurred_at is optional (absent/empty ⇒ null), but a present value
+        // that cannot be parsed is a sender bug: reject instead of silently
+        // storing null, so bad gateway timestamps never slip through as 200.
+        if ($occurredAt === null && $this->hasValue($occurredAtRaw)) {
+            return $this->reject($receipt, 'occurred_at_invalid', 422);
+        }
 
         $paidContext = null;
 
@@ -311,6 +319,21 @@ class PaymentWebhookProcessor
         $value = trim((string) $value);
 
         return $value === '' ? null : Str::limit($value, 128, '');
+    }
+
+    private function hasValue(mixed $value): bool
+    {
+        if ($value === null) {
+            return false;
+        }
+
+        if (is_string($value)) {
+            return trim($value) !== '';
+        }
+
+        // Any other present type (int, array, bool, …) counts as provided:
+        // parseDateTime only accepts strings, so these reject as invalid.
+        return true;
     }
 
     private function isUniqueViolation(\Illuminate\Database\QueryException $e): bool
