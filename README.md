@@ -7,7 +7,7 @@ Laravel modular-monolith backend for UKT invoices, tenant-isolated reads, and HM
 - PHP 8.3.30, Composer 2.6.5, Laravel 13.35.0, PHPUnit 12.5.38
 - `DB_CONNECTION=sqlite`, `DB_DATABASE=database/database.sqlite` (local/test verified)
 - PostgreSQL is user-managed: `.env.example` keeps commented `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD` placeholders only
-- Suite: `OK (22 tests, 87 assertions)` on sqlite `:memory:` via `phpunit.xml`
+- Suite: `OK (28 tests, 109 assertions)` on sqlite `:memory:` via `phpunit.xml`
 - Health: `GET /up` → `200`
 - Git: `main`, no secrets committed (`.env` + `*.sqlite` ignored)
 
@@ -20,7 +20,13 @@ touch database/database.sqlite
 php artisan migrate:fresh --force --seed
 php artisan serve --port=8000
 curl -i http://127.0.0.1:8000/up   # 200
-vendor/bin/phpunit                  # OK (22 tests, 87 assertions)
+vendor/bin/phpunit                  # OK (28 tests, 109 assertions)
+```
+
+Mock gateway sender (verified E2E, see `docs/10-local-development.md`):
+
+```bash
+php artisan mock:gateway-event --invoice=INV-MOCK-001 --event-id=evt-demo-1 --gateway-id=gw-demo-1
 ```
 
 Seed (`InstitutionSeeder`, demo-only secrets — rotate in real envs):
@@ -57,7 +63,7 @@ Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_numbe
 
 - `tests/Feature/InvoiceTenantIsolationTest.php` (7): missing/unknown header `401`, scoped create `201`, dup-per-tenant `422` vs cross-tenant `201`, show `404` hides cross-tenant, student list `meta.total` scoped, transactions `404` cross-tenant.
 - `tests/Feature/PaymentWebhookTest.php` (13): malformed `400` no leak, bad/missing signature `401` audited, success → `paid` + row, replay `event_id` → `duplicate`, reused `gateway_transaction_id` → `duplicate`, expiry → `expired` no row, late success after expiry → `ignored success_after_expiry`, expired-after-paid → `ignored already_final`, amount mismatch `422`, unknown institution `401`, redaction, tenant scoping.
-- Plus stock `ExampleTest` unit/feature (2) = 22 total.
+- Plus stock `ExampleTest` unit/feature (2), `MockGatewayEventBuilderTest` (3), `MockGatewayCommandTest` (3) = 28 total.
 
 ## Security / tenancy notes
 
