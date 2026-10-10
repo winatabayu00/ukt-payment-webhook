@@ -1,5 +1,7 @@
 # SEVIMA — Project M2: Integrasi Pembayaran UKT via Webhook
 
+![CI](https://github.com/winatabayu00/ukt-payment-webhook/actions/workflows/ci.yml/badge.svg)
+
 Laravel modular-monolith backend for UKT invoices, tenant-isolated reads, and HMAC-verified payment webhooks with audit + idempotency.
 
 ## Verified runtime (Phase 1)

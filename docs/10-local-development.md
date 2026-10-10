@@ -156,6 +156,16 @@ Verified live (throwaway sqlite, `scripts/demo.sh` + worker):
 template `mktemp` portabel (trailing `X`), sehingga export `DB_*` di host-shell
 (mis. kredensial pgsql harian) tidak pernah membelokkan demo ke database lain.
 
+## Continuous Integration (GitHub Actions)
+
+Workflow `.github/workflows/ci.yml` berjalan di setiap push/PR:
+
+- **test**: `composer install` + `php artisan test` (PHP 8.3, sqlite `:memory:`)
+- **demo**: `bash scripts/demo.sh` dengan `DB_*` pgsql hostile yang disengaja —
+  membuktikan demo tetap hermetic (regression guard bug `mktemp`/host-`DB_*`)
+
+Tanpa kredensial PG, tanpa secret di log.
+
 ## Docker Compose
 Jika digunakan, sediakan service app dan database dengan volume/healthcheck yang jelas. Jangan menyimpan password produksi dalam compose file. Dokumentasikan port dan cara reset database.
 
