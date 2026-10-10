@@ -1,31 +1,70 @@
 # SEVIMA — Project M2: Integrasi Pembayaran UKT via Webhook
 
-> Knowledge base dan rancangan awal proyek tes teknis. Dokumen ini bukan implementasi Laravel yang sudah dapat dijalankan.
+Laravel modular-monolith backend for UKT invoices, tenant-isolated reads, and HMAC-verified payment webhooks with audit + idempotency.
 
-## Tujuan
-Menyediakan konteks proyek yang konsisten untuk implementasi backend pengelolaan tagihan UKT, penerimaan webhook payment gateway, riwayat transaksi, dan isolasi data multi-institusi.
+## Verified runtime (Phase 1)
 
-## Sumber kebutuhan
-Dokumen utama: **Tes Teknis Software Engineer SEVIMA — Project M2: Integrasi Pembayaran UKT via Webhook**. Kebutuhan yang secara eksplisit tercantum di brief dirangkum dalam `docs/01-requirements-traceability.md`.
+- PHP 8.3.30, Composer 2.6.5, Laravel 13.35.0, PHPUnit 12.5.38
+- `DB_CONNECTION=sqlite`, `DB_DATABASE=database/database.sqlite` (local/test verified)
+- PostgreSQL is user-managed: `.env.example` keeps commented `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD` placeholders only
+- Suite: `OK (22 tests, 87 assertions)` on sqlite `:memory:` via `phpunit.xml`
+- Health: `GET /up` → `200`
+- Git: `main`, no secrets committed (`.env` + `*.sqlite` ignored)
 
-## Cara menggunakan knowledge base
-1. Baca `CLAUDE.md` sebelum meminta AI mengubah kode.
-2. Baca `docs/01-requirements-traceability.md` dan `docs/02-domain-and-business-rules.md` sebagai konteks domain.
-3. Gunakan `docs/03-architecture.md`, `docs/04-data-model.md`, dan kontrak API/webhook sebagai rancangan kerja.
-4. Catat keputusan final dan alternatif yang dipertimbangkan di `DECISIONS.md`.
-5. Isi `AI_NOTES.md` berdasarkan pengalaman pairing yang benar-benar terjadi. Jangan mengarang refleksi.
-6. Saat implementasi berjalan, perbarui dokumen jika keputusan berubah.
+## Quickstart (verified)
 
-## Status rancangan
-- [x] Kebutuhan dari brief dirangkum.
-- [x] Usulan arsitektur, model data, API, webhook, keamanan, dan test plan didokumentasikan.
-- [ ] Versi PHP/Laravel dan database lokal dikonfirmasi.
-- [ ] Keputusan final disetujui dan dicatat.
-- [ ] Aplikasi Laravel dibuat dan dijalankan.
-- [ ] Kontrak endpoint diverifikasi melalui implementasi dan test.
-- [ ] README dilengkapi hasil uji aktual dan instruksi yang sudah diverifikasi.
+```bash
+cp .env.example .env
+php artisan key:generate
+touch database/database.sqlite
+php artisan migrate:fresh --force --seed
+php artisan serve --port=8000
+curl -i http://127.0.0.1:8000/up   # 200
+vendor/bin/phpunit                  # OK (22 tests, 87 assertions)
+```
 
-## Batasan penting
-- Integrasi ke payment gateway sungguhan dan UI pembayaran berada di luar cakupan brief.
-- Endpoint dan bentuk payload pada dokumen ini adalah **proposal implementasi**, kecuali jika disebut eksplisit sebagai ketentuan brief.
-- Secret asli tidak boleh dimasukkan ke repository, contoh payload, test fixture, atau dokumentasi.
+Seed (`InstitutionSeeder`, demo-only secrets — rotate in real envs):
+
+- `CAMPUS-ALPHA / Kampus Alpha`
+- `CAMPUS-BETA / Kampus Beta`
+- `CAMPUS-GAMMA / Kampus Gamma`
+
+## Routes (verified via `route:list`)
+
+| Method | URI | Auth/scope | Notes |
+|---|---|---|---|
+| `POST` | `/api/invoices` | `X-Institution-Code` via `institution.resolve` | validate `student_number`, `semester YYYY-S`, `invoice_number` unique per `institution_id`, `amount ≥ 0.01`, `expires_at > now`; `201`, `401`, `422` |
+| `GET` | `/api/invoices/{invoice}` | same | tenant-scoped show; cross-tenant hidden as `404 NOT_FOUND` |
+| `GET` | `/api/invoices/{invoice}/transactions` | same | ordered ledger; cross-tenant `404` |
+| `GET` | `/api/students/{studentNumber}/invoices` | same | paginated 15/page with `meta.current_page/per_page/total` |
+| `POST` | `/api/webhooks/payments` | `X-Signature` HMAC + `institution_code` in body | audited + idempotent; see below |
+| `GET` | `/up` | — | health `200` |
+
+Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_number)` (migration + `StoreInvoiceRequest` + `409`-style `422` on race). Any `institution_id` in body is ignored.
+
+## Webhook contract (verified)
+
+- Header `X-Signature`: lowercase hex `HMAC-SHA256(raw_body, institution.webhook_secret)`, `hash_equals` constant-time (`WebhookSignatureVerifier`).
+- Body JSON requires `institution_code, event_type (payment.success|payment.expired), event_id, invoice_number, gateway_transaction_id, amount`; `occurred_at` optional (unparseable → `null`).
+- Every delivery inserts one `webhook_receipts` row (`received` → `processed|duplicate|ignored|rejected`) with `payload_redacted` (`webhook_secret/secret/card_number/card_cvv/signature` → `[REDACTED]`). No secrets/signatures in responses.
+- Idempotency: `(institution_id, event_id)` lookup → `duplicate 200 event_duplicate`; `(institution_id, gateway_transaction_id)` unique on `payment_transactions` (+ race-safe catch) → `duplicate 200`. Retries are safe.
+- Atomic: `lockForUpdate` invoice + state move + optional transaction insert in one `DB::transaction`.
+- State machine (`InvoiceStateMachine`): `unpaid + success → paid (+ transaction row)`; `unpaid + expired → expired (no row)`; `paid + expired → ignored already_final`; `expired + success → ignored success_after_expiry`; `paid + success / expired + expired → ignored already_final`. `amount` mismatch on success → `422 amount_mismatch`.
+- HTTP mapping: `processed|duplicate|ignored → 200`; malformed JSON → `400 MALFORMED_PAYLOAD`; unknown institution / bad signature → `401`; domain failures → `422` with stable `failure_reason` (`institution_code_missing, institution_unknown, event_type_unknown, event_id_missing, invoice_number_missing, gateway_transaction_missing, amount_invalid, invoice_not_found, amount_mismatch, signature_invalid`).
+- Tenant isolation: webhook resolves invoice strictly via `forInstitution(institution)`; `INV-SHARED` in ALPHA does not move BETA.
+
+## Testing
+
+- `tests/Feature/InvoiceTenantIsolationTest.php` (7): missing/unknown header `401`, scoped create `201`, dup-per-tenant `422` vs cross-tenant `201`, show `404` hides cross-tenant, student list `meta.total` scoped, transactions `404` cross-tenant.
+- `tests/Feature/PaymentWebhookTest.php` (13): malformed `400` no leak, bad/missing signature `401` audited, success → `paid` + row, replay `event_id` → `duplicate`, reused `gateway_transaction_id` → `duplicate`, expiry → `expired` no row, late success after expiry → `ignored success_after_expiry`, expired-after-paid → `ignored already_final`, amount mismatch `422`, unknown institution `401`, redaction, tenant scoping.
+- Plus stock `ExampleTest` unit/feature (2) = 22 total.
+
+## Security / tenancy notes
+
+- Demo credential `X-Institution-Code` is test-grade; production needs real auth (tokens/IdP). Never trust `institution_id` from client.
+- Secrets: `.env` ignored, `database/*.sqlite` ignored, `vendor/` + caches ignored. Only demo `demo-secret-*-please-rotate` in seeder + test-only `APP_KEY` in `phpunit.xml`; real secrets stay in user-managed `.env`/PG, never committed.
+- Contract source of truth: `contracts/openapi.yaml` v1.0.0 (reconciled Phase 1). Proposals in `docs/05/06` remain planning background.
+
+## Docs
+
+- `docs/01-15`, `DECISIONS.md` (final), `AI_NOTES.md`, `contracts/openapi.yaml`, `INDEX.md`, `CLAUDE.md`, `AGENTS.md`.
