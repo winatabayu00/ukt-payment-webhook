@@ -9,7 +9,7 @@ Laravel modular-monolith backend for UKT invoices, tenant-isolated reads, and HM
 - PHP 8.3.30, Composer 2.6.5, Laravel 13.35.0, PHPUnit 12.5.38
 - `DB_CONNECTION=sqlite`, `DB_DATABASE=database/database.sqlite` (local/test verified)
 - PostgreSQL is user-managed: `.env.example` keeps commented `DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD` placeholders only
-- Suite: `OK (44 tests, 176 assertions)` on sqlite `:memory:` via `phpunit.xml`
+- Suite: `OK (52 tests, 228 assertions)` on sqlite `:memory:` via `phpunit.xml`
 - Health: `GET /up` → `200`
 - Git: `main`, no secrets committed (`.env` + `*.sqlite` ignored)
 
@@ -23,7 +23,7 @@ touch database/database.sqlite
 php artisan migrate:fresh --force --seed
 php artisan serve --port=8000
 curl -i http://127.0.0.1:8000/up   # 200
-vendor/bin/phpunit                  # OK (44 tests, 176 assertions)
+vendor/bin/phpunit                  # OK (52 tests, 228 assertions)
 ```
 
 Mock gateway sender (verified E2E, see `docs/10-local-development.md`):
@@ -58,6 +58,14 @@ Seed (`InstitutionSeeder`, demo-only secrets — rotate in real envs):
 
 Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_number)` (migration + `StoreInvoiceRequest` + `409`-style `422` on race). Any `institution_id` in body is ignored.
 
+## Response envelope (verified, openapi v1.4.0)
+
+All `/api/*` responses share one envelope via `App\Support\ApiResponse` + `App\Support\ErrorCode`:
+
+- CRUD success: `{success:true, message, data, meta?}` (`201` create, `200` reads; student list adds `meta.current_page/per_page/total`).
+- CRUD/auth/validation/malformed errors: `{success:false, message, error:{code, details?}}` — stable codes (`INSTITUTION_UNRESOLVED|INSTITUTION_UNKNOWN` 401, `NOT_FOUND` 404, `VALIDATION_FAILED` 422 with `details:{field:[messages]}`, `RATE_LIMITED` 429, `MALFORMED_PAYLOAD` 400, `INTERNAL_ERROR` 500). `failedValidation` + `/api/*` exception handler both emit this shape — no raw Laravel error leaks.
+- Webhook deliveries: `{success:bool, message, data:{processing_status, failure_reason}}` — `processed|duplicate|ignored → success:true 200` (safe for gateway retry); `rejected|failed|malformed → success:false 4xx/500`. `data.*` and `error.code` are stable contract keys; `success`+`message` are additive. No secrets/signatures/traces in any body.
+
 ## Webhook contract (verified)
 
 - Header `X-Signature`: lowercase hex `HMAC-SHA256(raw_body, institution.webhook_secret)` (the common `sha256=<hex>` prefix form is also accepted, case-insensitive), `hash_equals` constant-time (`WebhookSignatureVerifier`). Rotate with `php artisan institution:webhook-secret <CODE> --rotate`.
@@ -72,9 +80,10 @@ Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_numbe
 ## Testing
 
 - `tests/Feature/InvoiceTenantIsolationTest.php` (8): missing/unknown Bearer token `401`, plaintext never stored, scoped create `201`, dup-per-tenant `422` vs cross-tenant `201`, show `404` hides cross-tenant, student list `meta.total` scoped, transactions `404` cross-tenant.
-- `tests/Feature/PaymentWebhookTest.php` (13): malformed `400` no leak, bad/missing signature `401` audited, success → `paid` + row, replay `event_id` → `duplicate`, reused `gateway_transaction_id` → `duplicate`, expiry → `expired` no row, late success after expiry → `ignored success_after_expiry`, expired-after-paid → `ignored already_final`, amount mismatch `422`, unknown institution `401`, redaction, tenant scoping.
+- `tests/Feature/PaymentWebhookTest.php` (15): malformed `400` no leak, bad/missing signature `401` audited, success → `paid` + row, replay `event_id` → `duplicate`, reused `gateway_transaction_id` → `duplicate`, expiry → `expired` no row, late success after expiry → `ignored success_after_expiry`, expired-after-paid → `ignored already_final`, amount mismatch `422`, unparseable/missing `occurred_at` handling, unknown institution `401`, redaction, tenant scoping.
 - `tests/Feature/WebhookAuditGapsTest.php` (7): nested redact recursive, `sha256=` prefix accepted, stale/future `occurred_at` `422`, time-expired success ignored with zero money movement, `webhook:prune` keeps/prunes failed correctly, `institution:webhook-secret --rotate` rotates and invalidates the old secret.
-- Plus stock `ExampleTest` unit/feature (2), `MockGatewayEventBuilderTest` (3), `MockGatewayCommandTest` (3) + `WebhookQueueMonitoringTest` (6) + `WebhookAuditGapsTest` (7) = 44 total.
+- `tests/Feature/ApiEnvelopeTest.php` (8): create/show/transactions/list use success envelope, auth `401` + not-found `404` use error envelope with stable codes, `422` carries Laravel-style `details`, webhook processed/rejected/malformed envelopes without leaks.
+- Plus stock `ExampleTest` unit/feature (2), `MockGatewayEventBuilderTest` (3), `MockGatewayCommandTest` (3) + `WebhookQueueMonitoringTest` (6) = 52 total.
 - Webhook side effects + ops: `payment.success` commit dispatches `NotifyPaymentSuccessJob` (database queue, tries 3, after-commit) — run `php artisan queue:work`; unexpected processor exceptions mark receipts `failed/internal_error` (`500` for gateway retry); `php artisan webhook:monitor [--institution=CODE] [--failures=N]` shows status counts, recent failures, queue depth, `failed_jobs`; `php artisan webhook:prune [--days=N] [--include-failed] [--dry-run]` handles retention (see `docs/10-local-development.md`).
 
 ## Security / tenancy notes
@@ -83,7 +92,7 @@ Invoice tenant rule: `invoice_number` unique per `(institution_id, invoice_numbe
 - Throttle: invoice routes `throttle:api-invoices` (per token per minute, `API_INVOICE_RATE_LIMIT=60`), webhook `throttle:api-webhooks` (per IP per minute, `API_WEBHOOK_RATE_LIMIT=300`) → `429` on exceed.
 - Prod template: `.env.production.example` (`APP_ENV=production`, `APP_DEBUG=false`, pgsql, no secrets). Run `migrate --force` on prod, never `migrate:fresh`.
 - Secrets: `.env` ignored, `database/*.sqlite` ignored, `vendor/` + caches ignored. Only demo `demo-secret-*-please-rotate` + `demo-token-*-please-rotate` in seeder (hash only) + test-only `APP_KEY` in `phpunit.xml`; real secrets stay in user-managed `.env`/PG, never committed.
-- Contract source of truth: `contracts/openapi.yaml` v1.3.0 (Bearer auth + 429 + queued side effect + `500 failed/internal_error` + `sha256=` tolerance + `occurred_at` window + time-expiry ignore + prune/rotation ops). Proposals in `docs/05/06` remain planning background.
+- Contract source of truth: `contracts/openapi.yaml` v1.4.0 (standard `SuccessEnvelope`/`ErrorEnvelope`/`WebhookEnvelope` via `ApiResponse` + `ErrorCode`; Bearer auth + 429 + queued side effect + `500 failed/internal_error` + `sha256=` tolerance + `occurred_at` window + time-expiry ignore + prune/rotation ops). `data.*` and `error.code` are stable; `success`+`message` additive. `docs/05/06` Final blocks mirror the verified contract.
 
 ## Docs
 

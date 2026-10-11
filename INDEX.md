@@ -3,7 +3,7 @@
 - `README.md` — project overview and usage.
 - `CLAUDE.md` — AI context, guardrails, and domain rules.
 - `AI_NOTES.md` — honest reflection template for AI pairing.
-- `DECISIONS.md` — five draft technical decisions with options and consequences.
+- `DECISIONS.md` — nine final technical decisions with options, consequences, and verified evidence.
 - `docs/01-requirements-traceability.md` — brief requirements mapped to planned evidence.
 - `docs/02-domain-and-business-rules.md` — domain language and rules.
 - `docs/03-architecture.md` — modular monolith and request/webhook flows.
@@ -19,7 +19,7 @@
 - `docs/13-interview-prep.md` — preparation for the 75–90 minute technical interview.
 - `docs/14-assumptions-and-open-questions.md` — unresolved questions and working assumptions.
 - `docs/15-source-of-truth.md` — priority of sources and update checklist.
-- `contracts/openapi.yaml` — draft OpenAPI contract (not yet authoritative).
+- `contracts/openapi.yaml` — verified OpenAPI contract v1.4.0 (source of truth for routes, envelopes, statuses, failure reasons).
 - `.env.example` — placeholder configuration only; contains no real secrets.
 - `.gitignore` — ignore local secrets and generated dependencies.
 

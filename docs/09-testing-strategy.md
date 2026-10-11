@@ -33,6 +33,7 @@ Test otomatis wajib mencakup logika bisnis inti, terutama isolasi antar-institus
 - Audit receipt dibuat untuk notifikasi valid dan invalid (redaksi rekursif di semua kedalaman).
 - Rollback jika salah satu operasi database gagal.
 - `WebhookAuditGapsTest` (7, audit-gap fix): redact nested, prefix `sha256=`, `occurred_at` basi/masa-depan `422`, success untuk invoice kedaluwarsa-waktu di-ignore tanpa money movement, `webhook:prune` (failed dipertahankan default), `institution:webhook-secret --rotate`.
+- `ApiEnvelopeTest` (8, envelope v1.4.0): success envelope untuk create/show/transactions/list, error envelope dengan kode stabil untuk auth `401` + not-found `404`, `422` membawa `details` gaya Laravel, envelope webhook processed/rejected/malformed tanpa leak.
 
 ## Seed data
 Minimal tiga institusi sesuai brief. Gunakan secret palsu hanya untuk lingkungan lokal/test. Jangan gunakan secret yang dikirim oleh recruiter dalam fixture yang di-commit.

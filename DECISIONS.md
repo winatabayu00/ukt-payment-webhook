@@ -1,6 +1,6 @@
-# Technical Decisions (Final — Phase 1 verified + prod hardening)
+# Technical Decisions (Final — Phase 1 verified + prod hardening + envelope v1.4.0)
 
-Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (35 tests, 136 assertions)` on sqlite `:memory:`. pgsql is user-managed via `.env.example` placeholders; prod template in `.env.production.example`.
+Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (52 tests, 228 assertions)` on sqlite `:memory:`. pgsql is user-managed via `.env.example` placeholders; prod template in `.env.production.example`.
 
 ## 1. Modular monolith Laravel — FINAL
 **Options:** (A) modular monolith, (B) microservices, (C) unstructured controllers.
@@ -22,7 +22,7 @@ Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (35 tests, 136 
 ## 4. Idempotency + late/out-of-order policy — FINAL
 **Options:** (A) unique identity + DB constraints + idempotent handling, (B) app check only, (C) every delivery new.
 **Chosen:** A. `event_id` required (`event_id_missing 422`); `(institution_id, event_id)` lookup over `processed|duplicate|ignored` → `duplicate 200 event_duplicate`; `unique(institution_id, gateway_transaction_id)` + race catch → `duplicate 200`. `payment.expired` creates no financial row (audit only). Every delivery (incl. duplicates) gets its own receipt row; receipts have plain `index(institution_id, event_id)` (not unique) — comment in `000004` migration. State rules: `unpaid+success→paid`, `unpaid+expired→expired`, `expired+success→ignored success_after_expiry`, `paid+expired→ignored already_final`, repeats → `ignored already_final`.
-**Verified:** 13 webhook tests incl. replay, reused gateway id, late success, expired-after-paid, redaction (`webhook_secret/card_number/signature → [REDACTED]`).
+**Verified:** 15 webhook tests incl. replay, reused gateway id, late success, expired-after-paid, unparseable/missing `occurred_at`, redaction (`webhook_secret/card_number/signature → [REDACTED]`).
 
 ## 5. Relational DB with domain constraints, sqlite-verified — FINAL
 **Options:** (A) PostgreSQL, (B) MySQL, (C) non-relational.
@@ -34,16 +34,22 @@ Runtime: PHP 8.3.30, Laravel 13.35.0, PHPUnit 12.5.38. Suite `OK (35 tests, 136 
 **Options:** (A) per-institution Bearer API token + throttle + prod env template, (B) keep demo header + external gateway auth, (C) full OAuth/IdP now.
 **Chosen:** A. Real per-institution token auth on all invoice endpoints; HMAC webhook verification + replay protection untouched; per-token invoice throttle + per-IP webhook throttle; `.env.production.example` (`APP_ENV=production`, `APP_DEBUG=false`, pgsql placeholders only, no secrets) + rotation command + docs/contract updates.
 **Why:** Closes the demo-credential gap with minimal scope (no business-logic change, no new infra); OAuth/IdP deferred as out-of-scope per task.
-**Verified:** suite `OK (29 tests, 111 assertions)`; manual `401` without credential confirmed; `429` limiters registered in `route:list`; prod template contains no dev defaults and no secrets.
+**Verified (at the time):** suite `OK (29 tests, 111 assertions)`; manual `401` without credential confirmed; `429` limiters registered in `route:list`; prod template contains no dev defaults and no secrets.
 
 ## 7. Queue worker + monitoring/log untuk webhook — FINAL
 **Options:** (A) sync webhook + queued side effect + monitor command + structured logs, (B) full-async webhook now, (C) external APM/alerting now.
 **Chosen:** A. Webhook stays synchronous idempotent; `payment.success` commit dispatches `NotifyPaymentSuccessJob` (database driver, tries 3, backoff 10/60/300s) AFTER the DB transaction — rollback never leaves a stray job, dispatch failure never rolls back money. Unexpected processor exceptions mark the receipt `failed/internal_error` (stable secret-free reason), log `webhook.failed` with structured context, return HTTP `500` for gateway retry. `php artisan webhook:monitor` (read-only) reports per-status receipt counts, recent failures with `failure_reason`, `jobs pending` + `failed_jobs` + recent `failed_jobs` rows. Logs `webhook.processed` / `webhook.failed` / `payment.notification.sent|skipped` carry ids + outcome only, never secrets.
 **Why:** Keeps the verified idempotent money path untouched while making side effects retryable via the worker and failures visible to ops; full-async + external alerting deferred as out-of-scope per task.
-**Verified:** suite `OK (35 tests, 136 assertions)` (incl. `WebhookQueueMonitoringTest` 6: job dispatch on success, no job on expired, exception → `failed`/`500` no leak, job safe-rerun, monitor summary + institution scope); live `demo.sh` green → monitor `processed 2, duplicate 1, failed 0, jobs pending 1` → `queue:work --once` `DONE` → `0 pending, 0 failed` → monitor `OK`. Contract bumped `contracts/openapi.yaml` v1.2.0 (`500 failed/internal_error`).
+**Verified (at the time):** suite `OK (35 tests, 136 assertions)` (incl. `WebhookQueueMonitoringTest` 6: job dispatch on success, no job on expired, exception → `failed`/`500` no leak, job safe-rerun, monitor summary + institution scope); live `demo.sh` green → monitor `processed 2, duplicate 1, failed 0, jobs pending 1` → `queue:work --once` `DONE` → `0 pending, 0 failed` → monitor `OK`. Contract bumped `contracts/openapi.yaml` v1.2.0 (`500 failed/internal_error`).
 
 ## 8. Webhook audit-gap fixes — FINAL
 **Options:** (A) recursive redact + `sha256=` tolerance + `occurred_at` window + time-expiry enforcement + prune/rotation commands + contract/docs/tests, (B) code fixes only without contract/docs/tests, (C) defer to later task.
 **Chosen:** A. `PaymentWebhookProcessor::redactPayload` recurses to any depth; `WebhookSignatureVerifier` strips a case-insensitive `sha256=` prefix; `occurred_at` outside the window (`config/api.php`: `WEBHOOK_OCCURRED_AT_MAX_PAST_DAYS=30` / `WEBHOOK_OCCURRED_AT_MAX_FUTURE_MINUTES=15`) → `422 occurred_at_too_old|occurred_at_in_future` with zero money movement; `payment.success` for a time-expired `unpaid` invoice expires it in place → `ignored 200 success_after_expiry` with zero transaction rows; `php artisan webhook:prune [--days=N] [--include-failed] [--dry-run]` deletes old terminal receipts (failed kept by default; never touches money tables; default from `WEBHOOK_RECEIPT_RETENTION_DAYS=90`); `php artisan institution:webhook-secret <CODE> [--rotate] [--secret=...]` issues/rotates the encrypted-at-rest HMAC secret (plaintext printed once).
 **Why:** Closes all 5 minor audit gaps without touching the verified money path, throttle, queue, or monitor behavior; env-overridable knobs keep prod flexibility.
-**Verified:** suite `OK (44 tests, 176 assertions)` (incl. new `WebhookAuditGapsTest` 7); contract bumped `contracts/openapi.yaml` v1.3.0 (`sha256=` tolerance + `occurred_at` window + time-expiry ignore + prune/rotation ops).
+**Verified (at the time):** suite `OK (44 tests, 176 assertions)` (incl. new `WebhookAuditGapsTest` 7); contract bumped `contracts/openapi.yaml` v1.3.0 (`sha256=` tolerance + `occurred_at` window + time-expiry ignore + prune/rotation ops).
+
+## 9. Standard API response envelope — FINAL
+**Options:** (A) one `ApiResponse` helper + `ErrorCode` constants used by all `/api/*` controllers/middleware/validation/handler, (B) per-controller ad-hoc shapes, (C) adopt a versioning/API-resource layer now.
+**Chosen:** A. `App\Support\ApiResponse` (`success` / `error` / `webhook` / `webhookOutcome`) + `App\Support\ErrorCode` (13 stable codes). CRUD success is `{success:true, message, data, meta?}`; errors are `{success:false, message, error:{code, details?}}` with `details:{field:[messages]}` on `422 VALIDATION_FAILED`; webhook deliveries are `{success:bool, message, data:{processing_status, failure_reason}}` with `processed|duplicate|ignored ⇒ success:true 200` and `rejected|failed|malformed ⇒ success:false 4xx/500`. `ResolveInstitution` (401), `StoreInvoiceRequest::failedValidation` (422), and the `/api/*` exception handler all emit the envelope — no raw Laravel errors leak. `data.*` and `error.code` are stable contract keys; `success`+`message` are additive; no secrets/signatures/traces in any body.
+**Why:** One documented shape for every client (invoice + webhook) with zero business-logic change; versioning (C) deferred as out-of-scope.
+**Verified:** suite `OK (52 tests, 228 assertions)` (incl. new `ApiEnvelopeTest` 8: success/error/webhook envelopes, stable codes, no-leak); `scripts/demo.sh` green; contract bumped `contracts/openapi.yaml` v1.4.0 (`SuccessEnvelope`/`ErrorEnvelope`/`WebhookEnvelope` schemas); `docs/05-api-contract.md` + `docs/06-webhook-contract.md` Final blocks synced.
