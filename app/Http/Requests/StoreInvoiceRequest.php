@@ -3,7 +3,11 @@
 namespace App\Http\Requests;
 
 use App\Models\Institution;
+use App\Support\ApiResponse;
+use App\Support\ErrorCode;
+use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
 
 class StoreInvoiceRequest extends FormRequest
@@ -46,5 +50,17 @@ class StoreInvoiceRequest extends FormRequest
             'semester.regex' => 'Semester must use the format YYYY-S, for example 2026-1.',
             'invoice_number.unique' => 'Invoice number is already used within this institution.',
         ];
+    }
+
+    protected function failedValidation(Validator $validator): void
+    {
+        throw new HttpResponseException(
+            ApiResponse::error(
+                ErrorCode::VALIDATION_FAILED,
+                'The request is invalid.',
+                422,
+                $validator->errors()->messages(),
+            )
+        );
     }
 }

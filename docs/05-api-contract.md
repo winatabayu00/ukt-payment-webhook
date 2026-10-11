@@ -7,6 +7,7 @@
 - Format: JSON.
 - Waktu: ISO 8601 dengan timezone yang eksplisit.
 - Error menggunakan HTTP status yang tepat dan format JSON konsisten.
+- Envelope standar via `App\Support\ApiResponse`: sukses `{success:true, message, data, meta?}`; error `{success:false, message, error:{code, details?}}` (422 `VALIDATION_FAILED` memakai `details:{field:[messages]}` gaya Laravel).
 - `institution_id` tidak boleh menjadi mekanisme otorisasi dari client.
 - Autentikasi pengguna/tenant belum ditentukan oleh brief; jangan menganggap endpoint privat aman sebelum mekanisme itu dipilih.
 
@@ -28,9 +29,12 @@ Request proposal:
 
 Tenant berasal dari konteks autentikasi tepercaya, bukan dari `institution_id` di body.
 
-Response proposal `201 Created`:
+Final (terverifikasi, openapi v1.4.0): sukses memakai `SuccessEnvelope`.
+Response `201 Created`:
 ```json
 {
+  "success": true,
+  "message": "Invoice created.",
   "data": {
     "id": "1",
     "student_number": "STU-001",
@@ -58,18 +62,25 @@ Kembalikan invoice mahasiswa dalam tenant yang aktif. Tambahkan pagination bila 
 
 Hanya transaksi dari invoice milik tenant yang aktif. Definisikan apakah response mencakup hanya transaksi finansial sah atau juga event expired; rekomendasi: receipt audit terpisah dari transaction history.
 
-## Format error proposal
+## Format error
+Final (terverifikasi, openapi v1.4.0): semua error `/api/*` memakai `ErrorEnvelope`
+`{success:false, message, error:{code, details?}}` via `ApiResponse::error`
+(middleware `ResolveInstitution` → `INSTITUTION_UNRESOLVED|INSTITUTION_UNKNOWN` 401;
+`StoreInvoiceRequest::failedValidation` + exception handler → `VALIDATION_FAILED` 422;
+cross-tenant/not-found → `NOT_FOUND` 404; throttle → `RATE_LIMITED` 429;
+fallback tak terduga → `UNAUTHENTICATED|FORBIDDEN|METHOD_NOT_ALLOWED|CONFLICT|REQUEST_FAILED|INTERNAL_ERROR`).
 ```json
 {
+  "success": false,
+  "message": "The request is invalid.",
   "error": {
     "code": "VALIDATION_FAILED",
-    "message": "The request is invalid.",
-    "details": {}
+    "details": { "amount": ["The amount field is required."] }
   }
 }
 ```
 
-Kode dan teks error final harus konsisten dengan implementasi.
+`error.code` stabil; tidak ada secret/signature/trace di body.
 
 ## Status HTTP kandidat
 - `201`: invoice berhasil dibuat.

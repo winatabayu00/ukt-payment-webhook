@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Enums\WebhookProcessingStatus;
 use App\Http\Controllers\Controller;
 use App\Services\PaymentWebhookProcessor;
+use App\Support\ApiResponse;
+use App\Support\ErrorCode;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,21 +19,19 @@ class PaymentWebhookController extends Controller
 
         $payload = json_decode($rawBody, true);
         if (! is_array($payload)) {
-            return response()->json([
-                'error' => ['code' => 'MALFORMED_PAYLOAD', 'message' => 'Request body must be valid JSON.'],
-            ], 400);
+            return ApiResponse::error(ErrorCode::MALFORMED_PAYLOAD, 'Request body must be valid JSON.', 400);
         }
 
         $result = $processor->process($rawBody, $signature, $payload);
         $receipt = $result->receipt;
 
         // Never leak secrets or signatures in responses; stable failure categories only.
-        return response()->json([
-            'data' => [
-                'processing_status' => $receipt->processing_status->value,
-                'failure_reason' => $receipt->failure_reason,
-            ],
-        ], $this->httpStatus($result->httpStatus, $receipt->processing_status));
+        [$success, $message] = ApiResponse::webhookOutcome($receipt->processing_status->value, $receipt->failure_reason);
+
+        return ApiResponse::webhook([
+            'processing_status' => $receipt->processing_status->value,
+            'failure_reason' => $receipt->failure_reason,
+        ], $this->httpStatus($result->httpStatus, $receipt->processing_status), $success, $message);
     }
 
     private function httpStatus(int $processorStatus, WebhookProcessingStatus $processing): int

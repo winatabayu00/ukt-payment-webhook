@@ -7,6 +7,8 @@ use App\Http\Requests\StoreInvoiceRequest;
 use App\Models\Institution;
 use App\Models\Invoice;
 use App\Services\InvoiceService;
+use App\Support\ApiResponse;
+use App\Support\ErrorCode;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -19,7 +21,7 @@ class InvoiceController extends Controller
 
         $invoice = $service->createFromValidated($institution, $request->validated());
 
-        return response()->json(['data' => $this->serialize($invoice->fresh())], 201);
+        return ApiResponse::success($this->serialize($invoice->fresh()), 'Invoice created.', 201);
     }
 
     public function show(Request $request, Invoice $invoice): JsonResponse
@@ -32,7 +34,7 @@ class InvoiceController extends Controller
             return $this->notFound();
         }
 
-        return response()->json(['data' => $this->serialize($invoice)]);
+        return ApiResponse::success($this->serialize($invoice), 'Invoice retrieved.');
     }
 
     public function transactions(Request $request, Invoice $invoice): JsonResponse
@@ -55,7 +57,7 @@ class InvoiceController extends Controller
                 'occurred_at' => $t->occurred_at?->toIso8601String(),
             ]);
 
-        return response()->json(['data' => $transactions]);
+        return ApiResponse::success($transactions, 'Transactions retrieved.');
     }
 
     /**
@@ -76,8 +78,6 @@ class InvoiceController extends Controller
 
     private function notFound(): JsonResponse
     {
-        return response()->json([
-            'error' => ['code' => 'NOT_FOUND', 'message' => 'Resource not found.'],
-        ], 404);
+        return ApiResponse::error(ErrorCode::NOT_FOUND, 'Resource not found.', 404);
     }
 }

@@ -3,6 +3,8 @@
 namespace App\Http\Middleware;
 
 use App\Models\Institution;
+use App\Support\ApiResponse;
+use App\Support\ErrorCode;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -24,24 +26,18 @@ class ResolveInstitution
         $token = $request->bearerToken();
 
         if (! is_string($token) || trim($token) === '') {
-            return response()->json([
-                'error' => [
-                    'code' => 'INSTITUTION_UNRESOLVED',
-                    'message' => 'Missing Authorization: Bearer <api-token> header.',
-                ],
-            ], 401);
+            return ApiResponse::error(
+                ErrorCode::INSTITUTION_UNRESOLVED,
+                'Missing Authorization: Bearer <api-token> header.',
+                401,
+            );
         }
 
         $candidate = Institution::apiTokenHash(trim($token));
         $institution = Institution::where('api_token_hash', $candidate)->first();
 
         if (! $institution || ! hash_equals((string) $institution->api_token_hash, $candidate)) {
-            return response()->json([
-                'error' => [
-                    'code' => 'INSTITUTION_UNKNOWN',
-                    'message' => 'Unknown or revoked API token.',
-                ],
-            ], 401);
+            return ApiResponse::error(ErrorCode::INSTITUTION_UNKNOWN, 'Unknown or revoked API token.', 401);
         }
 
         $request->attributes->set('institution', $institution);

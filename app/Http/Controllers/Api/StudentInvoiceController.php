@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Institution;
+use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -19,8 +20,8 @@ class StudentInvoiceController extends Controller
             ->orderBy('id')
             ->paginate(15);
 
-        return response()->json([
-            'data' => $invoices->map(fn ($invoice) => [
+        return ApiResponse::success(
+            $invoices->map(fn ($invoice) => [
                 'id' => (string) $invoice->id,
                 'student_number' => $invoice->student_number,
                 'semester' => $invoice->semester,
@@ -29,11 +30,13 @@ class StudentInvoiceController extends Controller
                 'expires_at' => $invoice->expires_at->toIso8601String(),
                 'status' => $invoice->status->value,
             ])->values(),
-            'meta' => [
+            'Student invoices retrieved.',
+            200,
+            [
                 'current_page' => $invoices->currentPage(),
                 'per_page' => $invoices->perPage(),
                 'total' => $invoices->total(),
             ],
-        ]);
+        );
     }
 }

@@ -63,6 +63,14 @@ Kebijakan draft:
 - Event konflik tetap dicatat di audit.
 - Perubahan status dan pencatatan transaksi harus atomik.
 
+## Respons envelope
+Final (terverifikasi, openapi v1.4.0): webhook memakai `WebhookEnvelope`
+`{success:bool, message, data:{processing_status, failure_reason}}` via
+`ApiResponse::webhook` — `processed|duplicate|ignored` → `success:true` 200
+(aman untuk retry gateway); `rejected|failed` → `success:false` 4xx/500
+(malformed JSON → `ErrorEnvelope` `MALFORMED_PAYLOAD` 400). Kunci
+`data.*` stabil; `success`+`message` aditif; tanpa secret/signature/trace.
+
 ## Kegagalan dan audit
 Audit minimal sebaiknya dapat menjawab:
 - Kapan notifikasi diterima?
